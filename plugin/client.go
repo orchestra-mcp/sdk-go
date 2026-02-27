@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"time"
 
 	pluginv1 "github.com/orchestra-mcp/gen-go/orchestra/plugin/v1"
 	"github.com/quic-go/quic-go"
@@ -19,7 +20,10 @@ type OrchestratorClient struct {
 // NewOrchestratorClient dials a QUIC connection to the given address using the
 // provided TLS configuration.
 func NewOrchestratorClient(ctx context.Context, addr string, tlsConfig *tls.Config) (*OrchestratorClient, error) {
-	conn, err := quic.DialAddr(ctx, addr, tlsConfig, &quic.Config{})
+	conn, err := quic.DialAddr(ctx, addr, tlsConfig, &quic.Config{
+		MaxIdleTimeout:  5 * time.Minute,
+		KeepAlivePeriod: 15 * time.Second,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

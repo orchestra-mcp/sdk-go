@@ -85,6 +85,12 @@ func (b *ManifestBuilder) NeedsTools(tools ...string) *ManifestBuilder {
 	return b
 }
 
+// ProvidesPrompts declares the prompt names this plugin provides.
+func (b *ManifestBuilder) ProvidesPrompts(names ...string) *ManifestBuilder {
+	b.manifest.ProvidesPrompts = append(b.manifest.ProvidesPrompts, names...)
+	return b
+}
+
 // Build returns the constructed PluginManifest.
 func (b *ManifestBuilder) Build() *pluginv1.PluginManifest {
 	return b.manifest

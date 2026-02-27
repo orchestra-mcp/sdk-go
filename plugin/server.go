@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	pluginv1 "github.com/orchestra-mcp/gen-go/orchestra/plugin/v1"
 	"github.com/google/uuid"
@@ -15,6 +16,9 @@ import (
 
 // ToolHandler is the function signature for handling tool invocations.
 type ToolHandler func(ctx context.Context, req *pluginv1.ToolRequest) (*pluginv1.ToolResponse, error)
+
+// PromptHandler is the function signature for handling prompt get requests.
+type PromptHandler func(ctx context.Context, req *pluginv1.PromptGetRequest) (*pluginv1.PromptGetResponse, error)
 
 // StorageHandler defines the interface that storage plugins must implement to
 // handle storage requests dispatched by the orchestrator.
@@ -31,6 +35,12 @@ type toolEntry struct {
 	handler    ToolHandler
 }
 
+// promptEntry holds a registered prompt definition alongside its handler.
+type promptEntry struct {
+	definition *pluginv1.PromptDefinition
+	handler    PromptHandler
+}
+
 // Server is a QUIC server that accepts plugin protocol requests (tool calls,
 // list_tools, health, boot, shutdown, storage) from an orchestrator or other
 // clients.
@@ -41,6 +51,7 @@ type Server struct {
 
 	mu             sync.RWMutex
 	tools          map[string]*toolEntry
+	prompts        map[string]*promptEntry
 	storageHandler StorageHandler
 
 	// actualAddr is the address the server is actually listening on, populated
@@ -57,6 +68,7 @@ func NewServer(addr string, tlsConfig *tls.Config) *Server {
 		tlsConfig: tlsConfig,
 		lifecycle: noopLifecycle{},
 		tools:     make(map[string]*toolEntry),
+		prompts:   make(map[string]*promptEntry),
 		readyCh:   make(chan struct{}),
 	}
 }
@@ -87,10 +99,27 @@ func (s *Server) RegisterTool(name string, description string, schema *structpb.
 	}
 }
 
+// RegisterPrompt adds a prompt to the server's registry.
+func (s *Server) RegisterPrompt(name string, description string, args []*pluginv1.PromptArgument, handler PromptHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prompts[name] = &promptEntry{
+		definition: &pluginv1.PromptDefinition{
+			Name:        name,
+			Description: description,
+			Arguments:   args,
+		},
+		handler: handler,
+	}
+}
+
 // ListenAndServe starts the QUIC listener and accepts connections until the
 // context is cancelled. Each connection is handled in its own goroutine.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	listener, err := quic.ListenAddr(s.addr, s.tlsConfig, &quic.Config{})
+	listener, err := quic.ListenAddr(s.addr, s.tlsConfig, &quic.Config{
+		MaxIdleTimeout:  5 * time.Minute,
+		KeepAlivePeriod: 15 * time.Second,
+	})
 	if err != nil {
 		return fmt.Errorf("quic listen %s: %w", s.addr, err)
 	}
@@ -212,6 +241,12 @@ func (s *Server) dispatch(ctx context.Context, req *pluginv1.PluginRequest) *plu
 	case *pluginv1.PluginRequest_ToolCall:
 		return s.handleToolCall(ctx, r.ToolCall)
 
+	case *pluginv1.PluginRequest_ListPrompts:
+		return s.handleListPrompts()
+
+	case *pluginv1.PluginRequest_PromptGet:
+		return s.handlePromptGet(ctx, r.PromptGet)
+
 	case *pluginv1.PluginRequest_StorageRead:
 		return s.handleStorageRead(ctx, r.StorageRead)
 
@@ -286,6 +321,54 @@ func (s *Server) handleToolCall(ctx context.Context, req *pluginv1.ToolRequest) 
 
 	return &pluginv1.PluginResponse{
 		Response: &pluginv1.PluginResponse_ToolCall{ToolCall: result},
+	}
+}
+
+// handleListPrompts returns all registered prompt definitions.
+func (s *Server) handleListPrompts() *pluginv1.PluginResponse {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	prompts := make([]*pluginv1.PromptDefinition, 0, len(s.prompts))
+	for _, entry := range s.prompts {
+		prompts = append(prompts, entry.definition)
+	}
+	return &pluginv1.PluginResponse{
+		Response: &pluginv1.PluginResponse_ListPrompts{
+			ListPrompts: &pluginv1.ListPromptsResponse{Prompts: prompts},
+		},
+	}
+}
+
+// handlePromptGet dispatches a prompt get request to the registered handler.
+func (s *Server) handlePromptGet(ctx context.Context, req *pluginv1.PromptGetRequest) *pluginv1.PluginResponse {
+	s.mu.RLock()
+	entry, ok := s.prompts[req.PromptName]
+	s.mu.RUnlock()
+
+	if !ok {
+		return &pluginv1.PluginResponse{
+			Response: &pluginv1.PluginResponse_PromptGet{
+				PromptGet: &pluginv1.PromptGetResponse{
+					Description: fmt.Sprintf("prompt %q not found", req.PromptName),
+				},
+			},
+		}
+	}
+
+	result, err := entry.handler(ctx, req)
+	if err != nil {
+		return &pluginv1.PluginResponse{
+			Response: &pluginv1.PluginResponse_PromptGet{
+				PromptGet: &pluginv1.PromptGetResponse{
+					Description: fmt.Sprintf("prompt handler error: %v", err),
+				},
+			},
+		}
+	}
+
+	return &pluginv1.PluginResponse{
+		Response: &pluginv1.PluginResponse_PromptGet{PromptGet: result},
 	}
 }
 

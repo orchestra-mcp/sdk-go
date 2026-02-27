@@ -178,6 +178,26 @@ func TestManifestBuilder(t *testing.T) {
 	}
 }
 
+// TestManifestBuilderWithPrompts verifies that ProvidesPrompts works.
+func TestManifestBuilderWithPrompts(t *testing.T) {
+	m := NewManifest("tools.marketplace").
+		Version("0.1.0").
+		Description("Marketplace plugin").
+		ProvidesTools("install_pack", "list_packs").
+		ProvidesPrompts("setup-project", "audit-packs").
+		Build()
+
+	if len(m.ProvidesPrompts) != 2 {
+		t.Fatalf("ProvidesPrompts: got %d items, want 2", len(m.ProvidesPrompts))
+	}
+	if m.ProvidesPrompts[0] != "setup-project" {
+		t.Errorf("ProvidesPrompts[0]: got %q, want %q", m.ProvidesPrompts[0], "setup-project")
+	}
+	if m.ProvidesPrompts[1] != "audit-packs" {
+		t.Errorf("ProvidesPrompts[1]: got %q, want %q", m.ProvidesPrompts[1], "audit-packs")
+	}
+}
+
 // TestQUICIntegration tests the full QUIC server/client flow:
 // - Start a QUIC server with a registered tool
 // - Connect a client
@@ -219,6 +239,25 @@ func TestQUICIntegration(t *testing.T) {
 		return &pluginv1.ToolResponse{
 			Success: true,
 			Result:  result,
+		}, nil
+	})
+
+	// Register a test prompt.
+	srv.RegisterPrompt("greet", "Greeting prompt", []*pluginv1.PromptArgument{
+		{Name: "name", Description: "Name to greet", Required: true},
+	}, func(ctx context.Context, req *pluginv1.PromptGetRequest) (*pluginv1.PromptGetResponse, error) {
+		name := req.Arguments["name"]
+		if name == "" {
+			name = "World"
+		}
+		return &pluginv1.PromptGetResponse{
+			Description: "Greeting prompt",
+			Messages: []*pluginv1.PromptMessage{
+				{
+					Role:    "user",
+					Content: &pluginv1.ContentBlock{Type: "text", Text: "Hello, " + name + "!"},
+				},
+			},
 		}, nil
 	})
 
@@ -349,6 +388,90 @@ func TestQUICIntegration(t *testing.T) {
 		}
 		if tc.ErrorCode != "tool_not_found" {
 			t.Errorf("error_code: got %q, want %q", tc.ErrorCode, "tool_not_found")
+		}
+	})
+
+	// Test: RegisterPrompt + ListPrompts
+	t.Run("ListPrompts", func(t *testing.T) {
+		resp, err := client.Send(ctx, &pluginv1.PluginRequest{
+			RequestId: "lp-1",
+			Request: &pluginv1.PluginRequest_ListPrompts{
+				ListPrompts: &pluginv1.ListPromptsRequest{},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Send ListPrompts: %v", err)
+		}
+		lp := resp.GetListPrompts()
+		if lp == nil {
+			t.Fatal("expected list_prompts response")
+		}
+		if len(lp.Prompts) != 1 {
+			t.Fatalf("expected 1 prompt, got %d", len(lp.Prompts))
+		}
+		if lp.Prompts[0].Name != "greet" {
+			t.Errorf("prompt name: got %q, want %q", lp.Prompts[0].Name, "greet")
+		}
+		if len(lp.Prompts[0].Arguments) != 1 {
+			t.Fatalf("expected 1 argument, got %d", len(lp.Prompts[0].Arguments))
+		}
+		if lp.Prompts[0].Arguments[0].Name != "name" {
+			t.Errorf("argument name: got %q, want %q", lp.Prompts[0].Arguments[0].Name, "name")
+		}
+	})
+
+	// Test: PromptGet
+	t.Run("PromptGet", func(t *testing.T) {
+		resp, err := client.Send(ctx, &pluginv1.PluginRequest{
+			RequestId: "pg-1",
+			Request: &pluginv1.PluginRequest_PromptGet{
+				PromptGet: &pluginv1.PromptGetRequest{
+					PromptName: "greet",
+					Arguments:  map[string]string{"name": "Alice"},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Send PromptGet: %v", err)
+		}
+		pg := resp.GetPromptGet()
+		if pg == nil {
+			t.Fatal("expected prompt_get response")
+		}
+		if pg.Description != "Greeting prompt" {
+			t.Errorf("description: got %q, want %q", pg.Description, "Greeting prompt")
+		}
+		if len(pg.Messages) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(pg.Messages))
+		}
+		if pg.Messages[0].Role != "user" {
+			t.Errorf("role: got %q, want %q", pg.Messages[0].Role, "user")
+		}
+		if pg.Messages[0].Content.Text != "Hello, Alice!" {
+			t.Errorf("text: got %q, want %q", pg.Messages[0].Content.Text, "Hello, Alice!")
+		}
+	})
+
+	// Test: PromptGet for nonexistent prompt
+	t.Run("PromptGetNotFound", func(t *testing.T) {
+		resp, err := client.Send(ctx, &pluginv1.PluginRequest{
+			RequestId: "pg-2",
+			Request: &pluginv1.PluginRequest_PromptGet{
+				PromptGet: &pluginv1.PromptGetRequest{
+					PromptName: "nonexistent",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Send PromptGet: %v", err)
+		}
+		pg := resp.GetPromptGet()
+		if pg == nil {
+			t.Fatal("expected prompt_get response")
+		}
+		// Not-found returns a response with description mentioning "not found"
+		if pg.Description == "" {
+			t.Error("expected non-empty description for not-found prompt")
 		}
 	})
 

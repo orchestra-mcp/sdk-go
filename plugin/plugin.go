@@ -33,6 +33,7 @@ type PluginBuilder struct {
 	certsDir         string
 	lifecycle        LifecycleHooks
 	tools            []pendingTool
+	prompts          []pendingPrompt
 	storageHandler   StorageHandler
 }
 
@@ -42,6 +43,14 @@ type pendingTool struct {
 	description string
 	schema      *structpb.Struct
 	handler     ToolHandler
+}
+
+// pendingPrompt holds prompt registration data until the plugin is built.
+type pendingPrompt struct {
+	name        string
+	description string
+	arguments   []*pluginv1.PromptArgument
+	handler     PromptHandler
 }
 
 // New creates a new PluginBuilder with the given plugin ID.
@@ -157,6 +166,19 @@ func (b *PluginBuilder) RegisterTool(name string, description string, schema *st
 	return b
 }
 
+// RegisterPrompt adds a prompt to the plugin. The prompt name is also added to
+// the manifest's ProvidesPrompts list.
+func (b *PluginBuilder) RegisterPrompt(name string, description string, args []*pluginv1.PromptArgument, handler PromptHandler) *PluginBuilder {
+	b.prompts = append(b.prompts, pendingPrompt{
+		name:        name,
+		description: description,
+		arguments:   args,
+		handler:     handler,
+	})
+	b.manifestBuilder.ProvidesPrompts(name)
+	return b
+}
+
 // SetStorageHandler sets the storage handler for the plugin. This is used by
 // storage plugins that handle StorageRead/Write/Delete/List requests.
 func (b *PluginBuilder) SetStorageHandler(h StorageHandler) *PluginBuilder {
@@ -186,6 +208,9 @@ func (b *PluginBuilder) BuildWithTools() *Plugin {
 	p.server.SetLifecycleHooks(p.lifecycle)
 	for _, t := range b.tools {
 		p.server.RegisterTool(t.name, t.description, t.schema, t.handler)
+	}
+	for _, pr := range b.prompts {
+		p.server.RegisterPrompt(pr.name, pr.description, pr.arguments, pr.handler)
 	}
 	if b.storageHandler != nil {
 		p.server.SetStorageHandler(b.storageHandler)
