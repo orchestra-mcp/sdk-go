@@ -1,0 +1,19 @@
+{
+    "name": "orchestra-mcp/sdk-go",
+    "description": "Go SDK for building Orchestra MCP plugins (QUIC transport, mTLS, Protobuf framing).",
+    "type": "lib",
+    "license": "MIT",
+    "homepage": "https://orchestra-mcp.dev",
+    "support": {
+        "issues": "https://github.com/orchestra-mcp/sdk-go/issues",
+        "source": "https://github.com/orchestra-mcp/sdk-go"
+    },
+    "require": {
+        "orchestra-mcp/gen-go": "^0.1.0"
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-master": "0.1.x-dev"
+        }
+    }
+}
