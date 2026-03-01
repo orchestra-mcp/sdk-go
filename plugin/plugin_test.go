@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -496,6 +497,236 @@ func TestQUICIntegration(t *testing.T) {
 	})
 
 	cancel()
+}
+
+// TestStreamingIntegration tests the full QUIC streaming flow:
+// - Start a QUIC server with a registered streaming tool
+// - Connect a client
+// - Send StreamStart, receive multiple StreamChunks + StreamEnd
+func TestStreamingIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	serverTLS, err := ServerTLSConfig(tmpDir, "stream-server")
+	if err != nil {
+		t.Fatalf("ServerTLSConfig: %v", err)
+	}
+
+	clientTLS, err := ClientTLSConfig(tmpDir, "stream-client")
+	if err != nil {
+		t.Fatalf("ClientTLSConfig: %v", err)
+	}
+
+	srv := NewServer("localhost:0", serverTLS)
+
+	// Register a streaming tool that sends 3 chunks.
+	srv.RegisterStreamingTool("count", "Count to N", nil, func(ctx context.Context, req *pluginv1.StreamStart, chunks chan<- []byte) error {
+		for i := 0; i < 3; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chunks <- []byte(fmt.Sprintf("chunk-%d", i)):
+			}
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	listener, err := quicListenForTest(serverTLS)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	actualAddr := listener.Addr().String()
+	listener.Close()
+
+	srv.addr = actualAddr
+	go func() {
+		srv.ListenAndServe(ctx)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+
+	client, err := NewOrchestratorClient(ctx, actualAddr, clientTLS)
+	if err != nil {
+		t.Fatalf("NewOrchestratorClient: %v", err)
+	}
+	defer client.Close()
+
+	t.Run("StreamingTool", func(t *testing.T) {
+		ch, err := client.SendStream(ctx, &pluginv1.PluginRequest{
+			RequestId: "stream-1",
+			Request: &pluginv1.PluginRequest_StreamStart{
+				StreamStart: &pluginv1.StreamStart{
+					StreamId: "sid-1",
+					ToolName: "count",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("SendStream: %v", err)
+		}
+
+		var chunks []string
+		var gotEnd bool
+		for resp := range ch {
+			if chunk := resp.GetStreamChunk(); chunk != nil {
+				chunks = append(chunks, string(chunk.Data))
+			}
+			if end := resp.GetStreamEnd(); end != nil {
+				gotEnd = true
+				if !end.Success {
+					t.Errorf("StreamEnd success=false: %s", end.ErrorMessage)
+				}
+				if end.TotalChunks != 3 {
+					t.Errorf("TotalChunks: got %d, want 3", end.TotalChunks)
+				}
+			}
+		}
+
+		if !gotEnd {
+			t.Error("never received StreamEnd")
+		}
+		if len(chunks) != 3 {
+			t.Fatalf("expected 3 chunks, got %d", len(chunks))
+		}
+		for i, c := range chunks {
+			expected := fmt.Sprintf("chunk-%d", i)
+			if c != expected {
+				t.Errorf("chunk[%d]: got %q, want %q", i, c, expected)
+			}
+		}
+	})
+
+	t.Run("StreamingToolNotFound", func(t *testing.T) {
+		ch, err := client.SendStream(ctx, &pluginv1.PluginRequest{
+			RequestId: "stream-2",
+			Request: &pluginv1.PluginRequest_StreamStart{
+				StreamStart: &pluginv1.StreamStart{
+					StreamId: "sid-2",
+					ToolName: "nonexistent",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("SendStream: %v", err)
+		}
+
+		for resp := range ch {
+			if end := resp.GetStreamEnd(); end != nil {
+				if end.Success {
+					t.Error("expected success=false for nonexistent streaming tool")
+				}
+				if end.ErrorCode != "tool_not_found" {
+					t.Errorf("error_code: got %q, want %q", end.ErrorCode, "tool_not_found")
+				}
+				return
+			}
+		}
+		t.Error("never received StreamEnd for nonexistent tool")
+	})
+
+	cancel()
+}
+
+// TestEventSubscription tests local event subscription and delivery.
+func TestEventSubscription(t *testing.T) {
+	srv := NewServer("localhost:0", nil)
+
+	received := make(chan *pluginv1.EventDelivery, 1)
+	subID := srv.Subscribe("feature.updated", nil, func(ctx context.Context, event *pluginv1.EventDelivery) {
+		received <- event
+	})
+
+	if subID == "" {
+		t.Fatal("Subscribe returned empty ID")
+	}
+
+	// Deliver an event via dispatch.
+	payload, _ := structpb.NewStruct(map[string]any{
+		"feature_id": "FEAT-001",
+	})
+	ctx := context.Background()
+	srv.handleEventDelivery(ctx, &pluginv1.EventDelivery{
+		Topic:        "feature.updated",
+		EventType:    "status_changed",
+		Payload:      payload,
+		SourcePlugin: "tools.features",
+	})
+
+	select {
+	case event := <-received:
+		if event.Topic != "feature.updated" {
+			t.Errorf("topic: got %q, want %q", event.Topic, "feature.updated")
+		}
+		if event.EventType != "status_changed" {
+			t.Errorf("event_type: got %q, want %q", event.EventType, "status_changed")
+		}
+		fid := event.Payload.Fields["feature_id"].GetStringValue()
+		if fid != "FEAT-001" {
+			t.Errorf("feature_id: got %q, want %q", fid, "FEAT-001")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event delivery")
+	}
+
+	// Unsubscribe and verify no more deliveries.
+	srv.Unsubscribe(subID)
+	srv.handleEventDelivery(ctx, &pluginv1.EventDelivery{
+		Topic:     "feature.updated",
+		EventType: "deleted",
+	})
+
+	select {
+	case <-received:
+		t.Error("received event after unsubscribe")
+	case <-time.After(100 * time.Millisecond):
+		// Expected — no event after unsubscribe.
+	}
+}
+
+// TestEventFilteredSubscription tests that event filters work correctly.
+func TestEventFilteredSubscription(t *testing.T) {
+	srv := NewServer("localhost:0", nil)
+
+	received := make(chan *pluginv1.EventDelivery, 2)
+	srv.Subscribe("build.completed", map[string]string{"project": "my-app"}, func(ctx context.Context, event *pluginv1.EventDelivery) {
+		received <- event
+	})
+
+	ctx := context.Background()
+
+	// Event matching the filter — should be delivered.
+	matchPayload, _ := structpb.NewStruct(map[string]any{"project": "my-app", "status": "success"})
+	srv.handleEventDelivery(ctx, &pluginv1.EventDelivery{
+		Topic:   "build.completed",
+		Payload: matchPayload,
+	})
+
+	// Event NOT matching the filter — should be dropped.
+	noMatchPayload, _ := structpb.NewStruct(map[string]any{"project": "other-app"})
+	srv.handleEventDelivery(ctx, &pluginv1.EventDelivery{
+		Topic:   "build.completed",
+		Payload: noMatchPayload,
+	})
+
+	select {
+	case event := <-received:
+		proj := event.Payload.Fields["project"].GetStringValue()
+		if proj != "my-app" {
+			t.Errorf("expected project=my-app, got %q", proj)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for matching event")
+	}
+
+	// Verify no second event was delivered.
+	select {
+	case <-received:
+		t.Error("received event that should have been filtered out")
+	case <-time.After(100 * time.Millisecond):
+		// Expected.
+	}
 }
 
 // quicListenForTest creates a QUIC listener on an ephemeral port and returns

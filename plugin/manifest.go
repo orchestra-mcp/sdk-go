@@ -73,6 +73,14 @@ func (b *ManifestBuilder) NeedsEvents(events ...string) *ManifestBuilder {
 	return b
 }
 
+// ProvidesAI declares the AI providers this plugin serves (e.g. "claude", "openai", "ollama").
+// The orchestrator uses this to build the AI routing table so that tool calls
+// with a matching provider field are dispatched to the correct bridge plugin.
+func (b *ManifestBuilder) ProvidesAI(providers ...string) *ManifestBuilder {
+	b.manifest.ProvidesAi = append(b.manifest.ProvidesAi, providers...)
+	return b
+}
+
 // NeedsAI declares the AI providers this plugin requires.
 func (b *ManifestBuilder) NeedsAI(providers ...string) *ManifestBuilder {
 	b.manifest.NeedsAi = append(b.manifest.NeedsAi, providers...)

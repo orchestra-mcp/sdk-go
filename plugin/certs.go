@@ -181,7 +181,7 @@ func ServerTLSConfig(certsDir string, name string) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    caPool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
 		NextProtos:   []string{"orchestra-plugin"},
 		MinVersion:   tls.VersionTLS13,
 	}, nil

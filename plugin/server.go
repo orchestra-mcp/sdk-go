@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -16,6 +18,15 @@ import (
 
 // ToolHandler is the function signature for handling tool invocations.
 type ToolHandler func(ctx context.Context, req *pluginv1.ToolRequest) (*pluginv1.ToolResponse, error)
+
+// StreamingToolHandler is the function signature for streaming tool invocations.
+// The handler sends chunks via the provided channel and returns when done.
+// Each []byte chunk is sent as a StreamChunk to the client. The content_type
+// parameter in StreamStart determines how chunks are interpreted.
+type StreamingToolHandler func(ctx context.Context, req *pluginv1.StreamStart, chunks chan<- []byte) error
+
+// EventHandler is called when an event is delivered to a subscriber.
+type EventHandler func(ctx context.Context, event *pluginv1.EventDelivery)
 
 // PromptHandler is the function signature for handling prompt get requests.
 type PromptHandler func(ctx context.Context, req *pluginv1.PromptGetRequest) (*pluginv1.PromptGetResponse, error)
@@ -35,10 +46,24 @@ type toolEntry struct {
 	handler    ToolHandler
 }
 
+// streamingToolEntry holds a registered streaming tool definition alongside its handler.
+type streamingToolEntry struct {
+	definition *pluginv1.ToolDefinition
+	handler    StreamingToolHandler
+}
+
 // promptEntry holds a registered prompt definition alongside its handler.
 type promptEntry struct {
 	definition *pluginv1.PromptDefinition
 	handler    PromptHandler
+}
+
+// subscription holds state for an event subscription.
+type subscription struct {
+	id      string
+	topic   string
+	filters map[string]string
+	handler EventHandler
 }
 
 // Server is a QUIC server that accepts plugin protocol requests (tool calls,
@@ -51,8 +76,11 @@ type Server struct {
 
 	mu             sync.RWMutex
 	tools          map[string]*toolEntry
+	streamingTools map[string]*streamingToolEntry
 	prompts        map[string]*promptEntry
 	storageHandler StorageHandler
+	subscriptions  map[string]*subscription // subscription_id → subscription
+	activeStreams   map[string]context.CancelFunc // stream_id → cancel
 
 	// actualAddr is the address the server is actually listening on, populated
 	// after ListenAndServe binds the socket. This is useful when addr is
@@ -64,12 +92,15 @@ type Server struct {
 // NewServer creates a new QUIC server bound to the given address.
 func NewServer(addr string, tlsConfig *tls.Config) *Server {
 	return &Server{
-		addr:      addr,
-		tlsConfig: tlsConfig,
-		lifecycle: noopLifecycle{},
-		tools:     make(map[string]*toolEntry),
-		prompts:   make(map[string]*promptEntry),
-		readyCh:   make(chan struct{}),
+		addr:           addr,
+		tlsConfig:      tlsConfig,
+		lifecycle:      noopLifecycle{},
+		tools:          make(map[string]*toolEntry),
+		streamingTools: make(map[string]*streamingToolEntry),
+		prompts:        make(map[string]*promptEntry),
+		subscriptions:  make(map[string]*subscription),
+		activeStreams:   make(map[string]context.CancelFunc),
+		readyCh:        make(chan struct{}),
 	}
 }
 
@@ -97,6 +128,41 @@ func (s *Server) RegisterTool(name string, description string, schema *structpb.
 		},
 		handler: handler,
 	}
+}
+
+// RegisterStreamingTool adds a streaming tool to the server's registry.
+func (s *Server) RegisterStreamingTool(name string, description string, schema *structpb.Struct, handler StreamingToolHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamingTools[name] = &streamingToolEntry{
+		definition: &pluginv1.ToolDefinition{
+			Name:        name,
+			Description: description,
+			InputSchema: schema,
+		},
+		handler: handler,
+	}
+}
+
+// Subscribe registers a local event handler for a topic. Returns subscription ID.
+func (s *Server) Subscribe(topic string, filters map[string]string, handler EventHandler) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := uuid.New().String()
+	s.subscriptions[id] = &subscription{
+		id:      id,
+		topic:   topic,
+		filters: filters,
+		handler: handler,
+	}
+	return id
+}
+
+// Unsubscribe removes a local event subscription.
+func (s *Server) Unsubscribe(subscriptionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, subscriptionID)
 }
 
 // RegisterPrompt adds a prompt to the server's registry.
@@ -170,23 +236,68 @@ func (s *Server) handleConnection(ctx context.Context, conn quic.Connection) {
 	}
 }
 
-// handleStream reads a single PluginRequest from a bidirectional stream,
-// dispatches it, writes the PluginResponse, and closes the stream.
-func (s *Server) handleStream(ctx context.Context, stream quic.Stream) {
-	defer stream.Close()
+// ListenAndServeTCP starts a plain TCP listener on the given address and serves
+// the same length-delimited Protobuf protocol as ListenAndServe (QUIC).
+// This is used by clients (e.g. Swift/macOS) that cannot open raw QUIC streams
+// via Network.framework. Each TCP connection handles one request/response.
+func (s *Server) ListenAndServeTCP(ctx context.Context, addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("tcp listen %s: %w", addr, err)
+	}
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+	}()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("tcp accept: %w", err)
+		}
+		go s.handleRWC(ctx, conn)
+	}
+}
+
+// handleRWC handles a single io.ReadWriteCloser (TCP conn or QUIC stream).
+func (s *Server) handleRWC(ctx context.Context, rwc io.ReadWriteCloser) {
+	defer rwc.Close()
 
 	var req pluginv1.PluginRequest
-	if err := ReadMessage(stream, &req); err != nil {
+	if err := ReadMessage(rwc, &req); err != nil {
 		log.Printf("read request: %v", err)
+		return
+	}
+
+	if ss := req.GetStreamStart(); ss != nil {
+		s.handleStreamingTool(ctx, &req, ss, rwc)
+		return
+	}
+
+	if sc := req.GetStreamCancel(); sc != nil {
+		s.mu.RLock()
+		cancelFn, ok := s.activeStreams[sc.StreamId]
+		s.mu.RUnlock()
+		if ok {
+			cancelFn()
+		}
 		return
 	}
 
 	resp := s.dispatch(ctx, &req)
 	resp.RequestId = req.RequestId
-
-	if err := WriteMessage(stream, resp); err != nil {
+	if err := WriteMessage(rwc, resp); err != nil {
 		log.Printf("write response: %v", err)
 	}
+}
+
+// handleStream reads a single PluginRequest from a bidirectional stream,
+// dispatches it, writes the PluginResponse, and closes the stream.
+// For StreamStart requests, the stream is kept open for multiple responses.
+func (s *Server) handleStream(ctx context.Context, stream quic.Stream) {
+	s.handleRWC(ctx, stream)
 }
 
 // dispatch routes a PluginRequest to the appropriate handler based on the
@@ -259,6 +370,33 @@ func (s *Server) dispatch(ctx context.Context, req *pluginv1.PluginRequest) *plu
 	case *pluginv1.PluginRequest_StorageList:
 		return s.handleStorageList(ctx, r.StorageList)
 
+	case *pluginv1.PluginRequest_Subscribe:
+		// Subscribe is handled by the orchestrator; plugins that receive it
+		// just acknowledge. Local subscriptions are managed via Server.Subscribe().
+		return &pluginv1.PluginResponse{
+			Response: &pluginv1.PluginResponse_EventDelivery{
+				EventDelivery: &pluginv1.EventDelivery{
+					SubscriptionId: r.Subscribe.SubscriptionId,
+					Topic:          r.Subscribe.Topic,
+				},
+			},
+		}
+
+	case *pluginv1.PluginRequest_Unsubscribe:
+		s.Unsubscribe(r.Unsubscribe.SubscriptionId)
+		return &pluginv1.PluginResponse{}
+
+	case *pluginv1.PluginRequest_Publish:
+		// Publish is typically sent TO the orchestrator, not received.
+		// If we receive it, deliver to local subscriptions.
+		s.handleEventDelivery(ctx, &pluginv1.EventDelivery{
+			Topic:        r.Publish.Topic,
+			EventType:    r.Publish.EventType,
+			Payload:      r.Publish.Payload,
+			SourcePlugin: r.Publish.SourcePlugin,
+		})
+		return &pluginv1.PluginResponse{}
+
 	default:
 		return &pluginv1.PluginResponse{
 			Response: &pluginv1.PluginResponse_ToolCall{
@@ -272,13 +410,16 @@ func (s *Server) dispatch(ctx context.Context, req *pluginv1.PluginRequest) *plu
 	}
 }
 
-// handleListTools returns all registered tool definitions.
+// handleListTools returns all registered tool definitions (both regular and streaming).
 func (s *Server) handleListTools() *pluginv1.PluginResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	tools := make([]*pluginv1.ToolDefinition, 0, len(s.tools))
+	tools := make([]*pluginv1.ToolDefinition, 0, len(s.tools)+len(s.streamingTools))
 	for _, entry := range s.tools {
+		tools = append(tools, entry.definition)
+	}
+	for _, entry := range s.streamingTools {
 		tools = append(tools, entry.definition)
 	}
 	return &pluginv1.PluginResponse{
@@ -489,6 +630,124 @@ func (s *Server) handleStorageList(ctx context.Context, req *pluginv1.StorageLis
 	}
 	return &pluginv1.PluginResponse{
 		Response: &pluginv1.PluginResponse_StorageList{StorageList: resp},
+	}
+}
+
+// handleStreamingTool runs a streaming tool handler, sending StreamChunks over
+// the QUIC stream and a final StreamEnd when the handler completes or is cancelled.
+func (s *Server) handleStreamingTool(ctx context.Context, req *pluginv1.PluginRequest, ss *pluginv1.StreamStart, stream io.ReadWriteCloser) {
+	s.mu.RLock()
+	entry, ok := s.streamingTools[ss.ToolName]
+	s.mu.RUnlock()
+
+	if !ok {
+		resp := &pluginv1.PluginResponse{
+			RequestId: req.RequestId,
+			Response: &pluginv1.PluginResponse_StreamEnd{
+				StreamEnd: &pluginv1.StreamEnd{
+					StreamId:     ss.StreamId,
+					Success:      false,
+					ErrorCode:    "tool_not_found",
+					ErrorMessage: fmt.Sprintf("streaming tool %q not found", ss.ToolName),
+				},
+			},
+		}
+		if err := WriteMessage(stream, resp); err != nil {
+			log.Printf("write stream end (not found): %v", err)
+		}
+		return
+	}
+
+	// Register cancellation for this stream.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	s.mu.Lock()
+	s.activeStreams[ss.StreamId] = cancel
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.activeStreams, ss.StreamId)
+		s.mu.Unlock()
+	}()
+
+	// Channel for handler to send chunks.
+	chunks := make(chan []byte, 16)
+
+	// Run the handler in a goroutine.
+	handlerErr := make(chan error, 1)
+	go func() {
+		defer close(chunks)
+		handlerErr <- entry.handler(streamCtx, ss, chunks)
+	}()
+
+	// Send chunks as they arrive.
+	var seq int64
+	for data := range chunks {
+		resp := &pluginv1.PluginResponse{
+			RequestId: req.RequestId,
+			Response: &pluginv1.PluginResponse_StreamChunk{
+				StreamChunk: &pluginv1.StreamChunk{
+					StreamId:    ss.StreamId,
+					Data:        data,
+					ContentType: "application/octet-stream",
+					Sequence:    seq,
+				},
+			},
+		}
+		if err := WriteMessage(stream, resp); err != nil {
+			log.Printf("write stream chunk: %v", err)
+			cancel()
+			return
+		}
+		seq++
+	}
+
+	// Wait for handler to finish and send StreamEnd.
+	err := <-handlerErr
+	endResp := &pluginv1.PluginResponse{
+		RequestId: req.RequestId,
+		Response: &pluginv1.PluginResponse_StreamEnd{
+			StreamEnd: &pluginv1.StreamEnd{
+				StreamId:    ss.StreamId,
+				Success:     err == nil,
+				TotalChunks: seq,
+			},
+		},
+	}
+	if err != nil {
+		endResp.GetStreamEnd().ErrorCode = "handler_error"
+		endResp.GetStreamEnd().ErrorMessage = err.Error()
+	}
+	if err := WriteMessage(stream, endResp); err != nil {
+		log.Printf("write stream end: %v", err)
+	}
+}
+
+// handleEventDelivery routes an incoming event to matching local subscriptions.
+func (s *Server) handleEventDelivery(ctx context.Context, event *pluginv1.EventDelivery) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, sub := range s.subscriptions {
+		if sub.topic != event.Topic {
+			continue
+		}
+		// Check filters — all filter keys must match event payload fields.
+		if len(sub.filters) > 0 && event.Payload != nil {
+			match := true
+			for k, v := range sub.filters {
+				if field, ok := event.Payload.Fields[k]; !ok || field.GetStringValue() != v {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		go sub.handler(ctx, event)
 	}
 }
 

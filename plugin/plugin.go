@@ -33,6 +33,7 @@ type PluginBuilder struct {
 	certsDir         string
 	lifecycle        LifecycleHooks
 	tools            []pendingTool
+	streamingTools   []pendingStreamingTool
 	prompts          []pendingPrompt
 	storageHandler   StorageHandler
 }
@@ -43,6 +44,14 @@ type pendingTool struct {
 	description string
 	schema      *structpb.Struct
 	handler     ToolHandler
+}
+
+// pendingStreamingTool holds streaming tool registration data until the plugin is built.
+type pendingStreamingTool struct {
+	name        string
+	description string
+	schema      *structpb.Struct
+	handler     StreamingToolHandler
 }
 
 // pendingPrompt holds prompt registration data until the plugin is built.
@@ -141,6 +150,13 @@ func (b *PluginBuilder) NeedsEvents(events ...string) *PluginBuilder {
 	return b
 }
 
+// ProvidesAI declares the AI providers this plugin serves (e.g. "claude", "openai", "ollama").
+// The orchestrator uses this to route tool calls with a matching provider field to this plugin.
+func (b *PluginBuilder) ProvidesAI(providers ...string) *PluginBuilder {
+	b.manifestBuilder.ProvidesAI(providers...)
+	return b
+}
+
 // NeedsAI declares AI provider dependencies in the manifest.
 func (b *PluginBuilder) NeedsAI(providers ...string) *PluginBuilder {
 	b.manifestBuilder.NeedsAI(providers...)
@@ -157,6 +173,20 @@ func (b *PluginBuilder) NeedsTools(tools ...string) *PluginBuilder {
 // the manifest's ProvidesTools list.
 func (b *PluginBuilder) RegisterTool(name string, description string, schema *structpb.Struct, handler ToolHandler) *PluginBuilder {
 	b.tools = append(b.tools, pendingTool{
+		name:        name,
+		description: description,
+		schema:      schema,
+		handler:     handler,
+	})
+	b.manifestBuilder.ProvidesTools(name)
+	return b
+}
+
+// RegisterStreamingTool adds a streaming tool to the plugin. The tool name is
+// also added to the manifest's ProvidesTools list. Streaming tools keep the QUIC
+// stream open and send multiple StreamChunk responses before a final StreamEnd.
+func (b *PluginBuilder) RegisterStreamingTool(name string, description string, schema *structpb.Struct, handler StreamingToolHandler) *PluginBuilder {
+	b.streamingTools = append(b.streamingTools, pendingStreamingTool{
 		name:        name,
 		description: description,
 		schema:      schema,
@@ -208,6 +238,9 @@ func (b *PluginBuilder) BuildWithTools() *Plugin {
 	p.server.SetLifecycleHooks(p.lifecycle)
 	for _, t := range b.tools {
 		p.server.RegisterTool(t.name, t.description, t.schema, t.handler)
+	}
+	for _, st := range b.streamingTools {
+		p.server.RegisterStreamingTool(st.name, st.description, st.schema, st.handler)
 	}
 	for _, pr := range b.prompts {
 		p.server.RegisterPrompt(pr.name, pr.description, pr.arguments, pr.handler)
