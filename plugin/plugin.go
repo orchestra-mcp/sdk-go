@@ -2,11 +2,11 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	pluginv1 "github.com/orchestra-mcp/gen-go/orchestra/plugin/v1"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -270,30 +270,51 @@ func (p *Plugin) ParseFlags() {
 	}
 }
 
+// manifestJSON is the JSON structure output by --manifest.
+type manifestJSON struct {
+	ID                string   `json:"id"`
+	Version           string   `json:"version"`
+	Description       string   `json:"description"`
+	Author            string   `json:"author"`
+	Language          string   `json:"language"`
+	ProvidesTools     []string `json:"provides_tools"`
+	ProvidesStorage   []string `json:"provides_storage"`
+	ProvidesTransport []string `json:"provides_transport"`
+	ProvidesAI        []string `json:"provides_ai"`
+	ProvidesPrompts   []string `json:"provides_prompts"`
+	NeedsStorage      []string `json:"needs_storage"`
+	NeedsAI           []string `json:"needs_ai"`
+	NeedsTools        []string `json:"needs_tools"`
+}
+
 // printManifestAndExit writes the plugin manifest as JSON to stdout and exits.
 func (p *Plugin) printManifestAndExit() {
 	m := p.manifest
-	fmt.Fprintf(os.Stdout, `{"id":%q,"version":%q,"description":%q,"provides_tools":%s,"provides_storage":%s,"needs_storage":%s}`,
-		m.Id,
-		m.Version,
-		m.Description,
-		jsonStringArray(m.ProvidesTools),
-		jsonStringArray(m.ProvidesStorage),
-		jsonStringArray(m.NeedsStorage),
-	)
-	fmt.Fprintln(os.Stdout)
+	out := manifestJSON{
+		ID:                m.Id,
+		Version:           m.Version,
+		Description:       m.Description,
+		Author:            m.Author,
+		Language:          m.Language,
+		ProvidesTools:     emptyIfNil(m.ProvidesTools),
+		ProvidesStorage:   emptyIfNil(m.ProvidesStorage),
+		ProvidesTransport: emptyIfNil(m.ProvidesTransport),
+		ProvidesAI:        emptyIfNil(m.ProvidesAi),
+		ProvidesPrompts:   emptyIfNil(m.ProvidesPrompts),
+		NeedsStorage:      emptyIfNil(m.NeedsStorage),
+		NeedsAI:           emptyIfNil(m.NeedsAi),
+		NeedsTools:        emptyIfNil(m.NeedsTools),
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.Encode(out)
 	os.Exit(0)
 }
 
-func jsonStringArray(arr []string) string {
-	if len(arr) == 0 {
-		return "[]"
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
 	}
-	parts := make([]string, len(arr))
-	for i, s := range arr {
-		parts[i] = fmt.Sprintf("%q", s)
-	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return s
 }
 
 // Run starts the plugin:
@@ -398,4 +419,82 @@ func (p *Plugin) Manifest() *pluginv1.PluginManifest {
 // should call this lazily (e.g., via a closure) rather than at registration time.
 func (p *Plugin) OrchestratorClient() *OrchestratorClient {
 	return p.orchestratorClient
+}
+
+// ----------------------------------------------------------------
+// In-process embedding support
+// ----------------------------------------------------------------
+
+// ExportedTool holds a tool's definition and handler for in-process use.
+type ExportedTool struct {
+	Name        string
+	Description string
+	Schema      *structpb.Struct
+	Handler     ToolHandler
+}
+
+// ExportedStreamTool holds a streaming tool's definition and handler.
+type ExportedStreamTool struct {
+	Name        string
+	Description string
+	Schema      *structpb.Struct
+	Handler     StreamingToolHandler
+}
+
+// ExportedPrompt holds a prompt's definition and handler.
+type ExportedPrompt struct {
+	Name        string
+	Description string
+	Arguments   []*pluginv1.PromptArgument
+	Handler     PromptHandler
+}
+
+// ExportedPlugin contains all tools, prompts, and storage handler collected
+// from a PluginBuilder, without any QUIC or network infrastructure. Used by
+// the in-process serve mode to embed plugins directly.
+type ExportedPlugin struct {
+	ID             string
+	Manifest       *pluginv1.PluginManifest
+	Tools          []ExportedTool
+	StreamTools    []ExportedStreamTool
+	Prompts        []ExportedPrompt
+	StorageHandler StorageHandler
+	Lifecycle      LifecycleHooks
+}
+
+// Export extracts all registered tools, prompts, and storage handler from
+// the builder without creating a QUIC server or Plugin runtime. This is
+// used by `orchestra serve` to embed plugins in a single process.
+func (b *PluginBuilder) Export() *ExportedPlugin {
+	ep := &ExportedPlugin{
+		ID:             b.manifestBuilder.manifest.Id,
+		Manifest:       b.manifestBuilder.Build(),
+		StorageHandler: b.storageHandler,
+		Lifecycle:      b.lifecycle,
+	}
+	for _, t := range b.tools {
+		ep.Tools = append(ep.Tools, ExportedTool{
+			Name:        t.name,
+			Description: t.description,
+			Schema:      t.schema,
+			Handler:     t.handler,
+		})
+	}
+	for _, st := range b.streamingTools {
+		ep.StreamTools = append(ep.StreamTools, ExportedStreamTool{
+			Name:        st.name,
+			Description: st.description,
+			Schema:      st.schema,
+			Handler:     st.handler,
+		})
+	}
+	for _, pr := range b.prompts {
+		ep.Prompts = append(ep.Prompts, ExportedPrompt{
+			Name:        pr.name,
+			Description: pr.description,
+			Arguments:   pr.arguments,
+			Handler:     pr.handler,
+		})
+	}
+	return ep
 }

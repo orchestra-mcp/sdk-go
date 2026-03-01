@@ -64,6 +64,9 @@ func FormatFeatureMD(f *types.FeatureData) string {
 	fmt.Fprintf(&b, "### %s — %s\n", f.ID, f.Title)
 	fmt.Fprintf(&b, "- **Status:** %s\n", f.Status)
 	fmt.Fprintf(&b, "- **Priority:** %s\n", f.Priority)
+	if f.Kind != "" {
+		fmt.Fprintf(&b, "- **Kind:** %s\n", f.Kind)
+	}
 	if f.Assignee != "" {
 		fmt.Fprintf(&b, "- **Assignee:** %s\n", f.Assignee)
 	}
@@ -86,14 +89,79 @@ func FormatFeatureListMD(features []*types.FeatureData, header string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(features))
-	fmt.Fprintf(&b, "| ID | Title | Status | Priority | Assignee |\n")
-	fmt.Fprintf(&b, "|----|-------|--------|----------|----------|\n")
+	fmt.Fprintf(&b, "| ID | Title | Status | Priority | Kind | Assignee |\n")
+	fmt.Fprintf(&b, "|----|-------|--------|----------|------|----------|\n")
 	for _, f := range features {
 		assignee := f.Assignee
 		if assignee == "" {
 			assignee = "—"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", f.ID, f.Title, f.Status, f.Priority, assignee)
+		kind := string(f.Kind)
+		if kind == "" {
+			kind = "feature"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", f.ID, f.Title, f.Status, f.Priority, kind, assignee)
+	}
+	return b.String()
+}
+
+// FormatPlanMD formats a single plan as a Markdown block.
+func FormatPlanMD(p *types.PlanData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", p.ID, p.Title)
+	fmt.Fprintf(&b, "- **Status:** %s\n", p.Status)
+	if len(p.Features) > 0 {
+		fmt.Fprintf(&b, "- **Features:** %s\n", strings.Join(p.Features, ", "))
+	}
+	if p.Description != "" {
+		fmt.Fprintf(&b, "\n%s\n", p.Description)
+	}
+	return b.String()
+}
+
+// FormatPlanListMD formats a list of plans as a Markdown table.
+func FormatPlanListMD(plans []*types.PlanData, header string) string {
+	if len(plans) == 0 {
+		return fmt.Sprintf("## %s\n\nNo plans found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(plans))
+	fmt.Fprintf(&b, "| ID | Title | Status | Features |\n")
+	fmt.Fprintf(&b, "|----|-------|--------|----------|\n")
+	for _, p := range plans {
+		featureCount := fmt.Sprintf("%d", len(p.Features))
+		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", p.ID, p.Title, p.Status, featureCount)
+	}
+	return b.String()
+}
+
+// FormatRequestMD formats a single request as a Markdown block.
+func FormatRequestMD(r *types.RequestData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", r.ID, r.Title)
+	fmt.Fprintf(&b, "- **Status:** %s\n", r.Status)
+	fmt.Fprintf(&b, "- **Kind:** %s\n", r.Kind)
+	fmt.Fprintf(&b, "- **Priority:** %s\n", r.Priority)
+	if r.ConvertedTo != "" {
+		fmt.Fprintf(&b, "- **Converted to:** %s\n", r.ConvertedTo)
+	}
+	if r.Description != "" {
+		fmt.Fprintf(&b, "\n%s\n", r.Description)
+	}
+	return b.String()
+}
+
+// FormatRequestListMD formats a list of requests as a Markdown table.
+func FormatRequestListMD(requests []*types.RequestData, header string) string {
+	if len(requests) == 0 {
+		return fmt.Sprintf("## %s\n\nNo requests found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(requests))
+	fmt.Fprintf(&b, "| ID | Title | Kind | Status | Priority |\n")
+	fmt.Fprintf(&b, "|----|-------|------|--------|----------|\n")
+	for _, r := range requests {
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", r.ID, r.Title, r.Kind, r.Status, r.Priority)
 	}
 	return b.String()
 }

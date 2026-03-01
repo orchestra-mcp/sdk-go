@@ -36,10 +36,24 @@ func NewUUID() string {
 // NewFeatureID generates a feature ID in the format "FEAT-XXX" where XXX is
 // three random uppercase ASCII letters.
 func NewFeatureID() string {
+	return newID("FEAT")
+}
+
+// NewPlanID generates a plan ID in the format "PLAN-XXX".
+func NewPlanID() string {
+	return newID("PLAN")
+}
+
+// NewRequestID generates a request ID in the format "REQ-XXX".
+func NewRequestID() string {
+	return newID("REQ")
+}
+
+func newID(prefix string) string {
 	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, 3)
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
-	return "FEAT-" + string(b)
+	return prefix + "-" + string(b)
 }

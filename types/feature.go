@@ -1,5 +1,18 @@
 package types
 
+// FeatureKind distinguishes the type of work item.
+type FeatureKind string
+
+const (
+	KindFeature FeatureKind = "feature"
+	KindBug     FeatureKind = "bug"
+	KindHotfix  FeatureKind = "hotfix"
+	KindChore   FeatureKind = "chore"
+)
+
+// ValidKinds is the set of valid FeatureKind values for validation.
+var ValidKinds = []string{"feature", "bug", "hotfix", "chore"}
+
 // FeatureStatus represents the current state of a feature in the workflow.
 type FeatureStatus string
 
@@ -25,6 +38,7 @@ type FeatureData struct {
 	Description string        `json:"description"`
 	Status      FeatureStatus `json:"status"`
 	Priority    string        `json:"priority"` // P0-P3
+	Kind        FeatureKind   `json:"kind,omitempty"`
 	Assignee    string        `json:"assignee,omitempty"`
 	Labels      []string      `json:"labels,omitempty"`
 	DependsOn   []string      `json:"depends_on,omitempty"`
