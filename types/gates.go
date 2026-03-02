@@ -28,6 +28,8 @@ type GateRequirement struct {
 	RequiredSections  []string      // section names (without "## " prefix)
 	FilePathSections  []string      // sections that MUST contain at least one file path
 	MinSectionLen     int           // minimum characters of content per section
+	MinTotalLen       int           // minimum total characters across all evidence (0 = no check)
+	MinFilePaths      int           // minimum distinct file paths required in FilePathSections (0 = just 1)
 	SkippableForKinds []FeatureKind // gate can be auto-passed for these kinds
 	Checklist         string        // markdown checklist returned to the agent on rejection
 }
@@ -62,6 +64,13 @@ func (g *GateRequirement) Validate(evidence string) error {
 		return fmt.Errorf("evidence too short: gate %q requires at least 30 characters (got %d)", g.Name, len(trimmed))
 	}
 
+	// Check minimum total evidence length if configured.
+	if g.MinTotalLen > 0 && len(trimmed) < g.MinTotalLen {
+		return fmt.Errorf("evidence too short: gate %q requires at least %d characters total (got %d). "+
+			"Provide detailed, substantive evidence that reflects real work performed",
+			g.Name, g.MinTotalLen, len(trimmed))
+	}
+
 	minLen := g.MinSectionLen
 	if minLen == 0 {
 		minLen = 10
@@ -92,24 +101,41 @@ func (g *GateRequirement) Validate(evidence string) error {
 			minLen, strings.Join(tooShort, ", "))
 	}
 
-	// Validate that file-path-required sections contain at least one file path.
-	var noFiles []string
+	// Validate that file-path-required sections contain minimum distinct file paths.
+	minPaths := g.MinFilePaths
+	if minPaths <= 0 {
+		minPaths = 1
+	}
+	var tooFewFiles []string
 	for _, reqSection := range g.FilePathSections {
 		content, found := sections[strings.ToLower(reqSection)]
 		if !found {
 			continue // already caught by missing sections check above
 		}
-		if !filePathPattern.MatchString(content) {
-			noFiles = append(noFiles, reqSection)
+		paths := CountDistinctFilePaths(content)
+		if paths < minPaths {
+			tooFewFiles = append(tooFewFiles, fmt.Sprintf("%s (found %d, need %d)", reqSection, paths, minPaths))
 		}
 	}
-	if len(noFiles) > 0 {
-		return fmt.Errorf("sections must reference actual file paths (e.g., src/main.go, docs/README.md): %s. "+
+	if len(tooFewFiles) > 0 {
+		return fmt.Errorf("sections must reference at least %d distinct file path(s) (e.g., src/main.go, docs/README.md): %s. "+
 			"Evidence must reflect real file changes, not just prose descriptions",
-			strings.Join(noFiles, ", "))
+			minPaths, strings.Join(tooFewFiles, ", "))
 	}
 
 	return nil
+}
+
+// CountDistinctFilePaths counts the number of unique file paths matched in text.
+func CountDistinctFilePaths(text string) int {
+	matches := filePathPattern.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		if len(m) > 1 {
+			seen[m[1]] = true
+		}
+	}
+	return len(seen)
 }
 
 // parseSections extracts markdown sections from evidence text. Returns a map
@@ -158,7 +184,9 @@ var GateRequirements = map[FeatureStatus]map[FeatureStatus]*GateRequirement{
 			Name:             "Implementation Complete",
 			RequiredSections: []string{"Summary", "Changes", "Verification"},
 			FilePathSections: []string{"Changes"},
-			MinSectionLen:    10,
+			MinSectionLen:    20,
+			MinTotalLen:      100,
+			MinFilePaths:     1,
 			Checklist: `## Gate 1: Implementation Complete
 
 Before advancing from **in-progress** to **ready-for-testing**, provide evidence with these sections:
@@ -173,7 +201,9 @@ Before advancing from **in-progress** to **ready-for-testing**, provide evidence
 evidence: "## Summary\n<describe what was built>\n\n## Changes\n- libs/foo/bar.go (added validation)\n- libs/baz/qux.go (new file)\n\n## Verification\n<describe how to test>"
 ` + "```" + `
 
-Each section must have at least 10 characters of content. The **Changes** section must reference actual file paths.`,
+Each section must have at least 20 characters of content, and total evidence must be at least 100 characters. The **Changes** section must reference actual file paths.
+
+**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates. Evidence is checked for substance — templated or copied evidence will be rejected.`,
 		},
 	},
 	StatusInTesting: {
@@ -183,7 +213,8 @@ Each section must have at least 10 characters of content. The **Changes** sectio
 			To:               StatusReadyForDocs,
 			Name:             "Testing Complete",
 			RequiredSections: []string{"Summary", "Results", "Coverage"},
-			MinSectionLen:    10,
+			MinSectionLen:    20,
+			MinTotalLen:      100,
 			Checklist: `## Gate 2: Testing Complete
 
 Before advancing from **in-testing** to **ready-for-docs**, provide evidence with these sections:
@@ -198,7 +229,9 @@ Before advancing from **in-testing** to **ready-for-docs**, provide evidence wit
 evidence: "## Summary\n<describe testing scope>\n\n## Results\n<describe outcomes>\n\n## Coverage\n<describe coverage>"
 ` + "```" + `
 
-Each section must have at least 10 characters of content.`,
+Each section must have at least 20 characters of content, and total evidence must be at least 100 characters.
+
+**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.`,
 		},
 	},
 	StatusInDocs: {
@@ -209,7 +242,9 @@ Each section must have at least 10 characters of content.`,
 			Name:              "Documentation Complete",
 			RequiredSections:  []string{"Summary", "Location"},
 			FilePathSections:  []string{"Location"},
-			MinSectionLen:     10,
+			MinSectionLen:     20,
+			MinTotalLen:       80,
+			MinFilePaths:      1,
 			SkippableForKinds: []FeatureKind{KindBug, KindHotfix},
 			Checklist: `## Gate 3: Documentation Complete
 
@@ -224,7 +259,9 @@ Before advancing from **in-docs** to **documented**, provide evidence with these
 evidence: "## Summary\n<describe what was documented>\n\n## Location\n- docs/feature-x.md (new)\n- CHANGELOG.md (updated)"
 ` + "```" + `
 
-Each section must have at least 10 characters of content. The **Location** section must reference actual file paths.`,
+Each section must have at least 20 characters of content, and total evidence must be at least 80 characters. The **Location** section must reference actual file paths.
+
+**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.`,
 		},
 	},
 }
@@ -239,7 +276,9 @@ var ReviewGate = &GateRequirement{
 	Name:             "Self-Review",
 	RequiredSections: []string{"Summary", "Quality", "Checklist"},
 	FilePathSections: []string{"Checklist"},
-	MinSectionLen:    10,
+	MinSectionLen:    20,
+	MinTotalLen:      120,
+	MinFilePaths:     1,
 	Checklist: `## Gate 4: Self-Review (before human review)
 
 Before requesting a human review, provide your self-review evidence with these sections:
@@ -254,7 +293,10 @@ Before requesting a human review, provide your self-review evidence with these s
 evidence: "## Summary\n<what this feature does>\n\n## Quality\n<your quality assessment>\n\n## Checklist\n- [x] libs/foo/bar.go — added validation\n- [x] docs/feature.md — documentation"
 ` + "```" + `
 
-Each section must have at least 10 characters of content. The **Checklist** section must reference actual file paths.
+Each section must have at least 20 characters of content, and total evidence must be at least 120 characters. The **Checklist** section must reference actual file paths.
+
+**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.
+
 After this, the MCP will instruct you to ask the user for final approval.`,
 }
 

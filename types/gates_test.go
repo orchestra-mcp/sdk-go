@@ -78,8 +78,8 @@ func TestGateValidateTooShort(t *testing.T) {
 
 func TestGateValidateMissingSections(t *testing.T) {
 	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Long enough but no sections.
-	err := gate.Validate("This is a long enough string but has no markdown section headers at all.")
+	// Long enough (>100 chars) but no sections.
+	err := gate.Validate("This is a long enough string but has no markdown section headers at all. It needs to be over one hundred characters to pass the total length check first.")
 	if err == nil {
 		t.Fatal("expected error for missing sections")
 	}
@@ -90,8 +90,8 @@ func TestGateValidateMissingSections(t *testing.T) {
 
 func TestGateValidatePartialSections(t *testing.T) {
 	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Has Summary but missing Changes and Verification.
-	err := gate.Validate("## Summary\nImplemented the login flow with full OAuth2 support.\n")
+	// Has Summary but missing Changes and Verification. Must be >100 chars total.
+	err := gate.Validate("## Summary\nImplemented the login flow with full OAuth2 support including token refresh, PKCE verification, and comprehensive error handling.\n")
 	if err == nil {
 		t.Fatal("expected error for partial sections")
 	}
@@ -102,7 +102,8 @@ func TestGateValidatePartialSections(t *testing.T) {
 
 func TestGateValidateEmptySectionContent(t *testing.T) {
 	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	err := gate.Validate("## Summary\nImplemented the full login flow.\n\n## Changes\n\n\n## Verification\nRun the test suite.")
+	// Must be >100 chars total to pass MinTotalLen. Changes section is empty.
+	err := gate.Validate("## Summary\nImplemented the full login flow with OAuth2 and JWT tokens.\n\n## Changes\n\n\n## Verification\nRun the entire test suite to verify all endpoints work correctly.")
 	if err == nil {
 		t.Fatal("expected error for empty section content")
 	}
@@ -144,8 +145,8 @@ func TestGate2TestingComplete(t *testing.T) {
 		t.Fatalf("expected valid testing evidence to pass, got: %v", err)
 	}
 
-	// Missing Results section.
-	err = gate.Validate("## Summary\nTested all endpoints.\n\n## Coverage\nFull coverage of auth module.")
+	// Missing Results section. Must be >100 chars total.
+	err = gate.Validate("## Summary\nTested all API endpoints and edge cases for the authentication module.\n\n## Coverage\nFull line and branch coverage of the auth module including error paths.")
 	if err == nil {
 		t.Fatal("expected error for missing Results section")
 	}
@@ -166,8 +167,8 @@ func TestGate3DocumentationComplete(t *testing.T) {
 		t.Fatalf("expected valid doc evidence to pass, got: %v", err)
 	}
 
-	// Missing Location.
-	err = gate.Validate("## Summary\nDocumented the entire auth system thoroughly.")
+	// Missing Location. Must be >80 chars total for Gate 3.
+	err = gate.Validate("## Summary\nDocumented the entire auth system thoroughly including all endpoints, configuration, and setup instructions.")
 	if err == nil {
 		t.Fatal("expected error for missing Location section")
 	}
@@ -188,8 +189,8 @@ func TestReviewGate(t *testing.T) {
 		t.Fatalf("expected valid self-review to pass, got: %v", err)
 	}
 
-	// Missing Quality.
-	err = gate.Validate("## Summary\nOAuth2 login feature.\n\n## Checklist\n- Login endpoint done")
+	// Missing Quality. Must be >120 chars total for ReviewGate.
+	err = gate.Validate("## Summary\nOAuth2 login feature with JWT tokens and refresh flow.\n\n## Checklist\n- [x] auth/handler.go - Login endpoint implemented and tested with comprehensive edge cases")
 	if err == nil {
 		t.Fatal("expected error for missing Quality section")
 	}
@@ -203,8 +204,8 @@ func TestGateValidateRejectsEvidenceWithoutFilePaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for Changes section without file paths")
 	}
-	if !strings.Contains(err.Error(), "file paths") {
-		t.Errorf("expected 'file paths' in error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "file path") {
+		t.Errorf("expected 'file path' in error, got: %s", err.Error())
 	}
 }
 
@@ -215,8 +216,8 @@ func TestGate3RejectsLocationWithoutFilePaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for Location section without file paths")
 	}
-	if !strings.Contains(err.Error(), "file paths") {
-		t.Errorf("expected 'file paths' in error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "file path") {
+		t.Errorf("expected 'file path' in error, got: %s", err.Error())
 	}
 }
 
