@@ -15,6 +15,12 @@ const (
 	// RequestsDir is the subdirectory within a project that holds request files.
 	RequestsDir = "requests"
 
+	// PersonsDir is the subdirectory within a project that holds person files.
+	PersonsDir = "persons"
+
+	// AssignmentRulesDir is the subdirectory within a project that holds assignment rule files.
+	AssignmentRulesDir = "assignment-rules"
+
 	// ConfigFile is the name of the project configuration file.
 	ConfigFile = "project.json"
 )
@@ -38,6 +44,20 @@ func PlanPath(projectSlug, planID string) string {
 // .projects/{slug}/requests/{id}.md
 func RequestPath(projectSlug, requestID string) string {
 	return filepath.Join(ProjectsDir, projectSlug, RequestsDir, requestID+".md")
+}
+
+// PersonPath returns the file path for a person within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/persons/{id}.md
+func PersonPath(projectSlug, personID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, PersonsDir, personID+".md")
+}
+
+// AssignmentRulePath returns the file path for an assignment rule within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/assignment-rules/{id}.md
+func AssignmentRulePath(projectSlug, ruleID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, AssignmentRulesDir, ruleID+".md")
 }
 
 // ProjectPath returns the directory path for a project.

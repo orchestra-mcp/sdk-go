@@ -245,7 +245,7 @@ Each section must have at least 20 characters of content, and total evidence mus
 			MinSectionLen:     20,
 			MinTotalLen:       80,
 			MinFilePaths:      1,
-			SkippableForKinds: []FeatureKind{KindBug, KindHotfix},
+			SkippableForKinds: []FeatureKind{KindBug, KindHotfix, KindTestcase},
 			Checklist: `## Gate 3: Documentation Complete
 
 Before advancing from **in-docs** to **documented**, provide evidence with these sections:

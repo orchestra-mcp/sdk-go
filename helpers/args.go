@@ -109,3 +109,30 @@ func GetStringSlice(s *structpb.Struct, key string) []string {
 	}
 	return result
 }
+
+// GetStringMap extracts a map[string]string from a structpb.Struct by key.
+// Each value in the struct is converted to a string; non-string values are
+// silently skipped. Returns nil if the key is missing or the value is not a struct.
+func GetStringMap(s *structpb.Struct, key string) map[string]string {
+	if s == nil {
+		return nil
+	}
+	v, ok := s.Fields[key]
+	if !ok || v == nil {
+		return nil
+	}
+	sv, ok := v.Kind.(*structpb.Value_StructValue)
+	if !ok || sv.StructValue == nil {
+		return nil
+	}
+	result := make(map[string]string, len(sv.StructValue.Fields))
+	for k, val := range sv.StructValue.Fields {
+		if str, ok := val.Kind.(*structpb.Value_StringValue); ok {
+			result[k] = str.StringValue
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}

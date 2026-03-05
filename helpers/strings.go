@@ -49,6 +49,16 @@ func NewRequestID() string {
 	return newID("REQ")
 }
 
+// NewPersonID generates a person ID in the format "PERS-XXX".
+func NewPersonID() string {
+	return newID("PERS")
+}
+
+// NewRuleID generates an assignment rule ID in the format "RULE-XXX".
+func NewRuleID() string {
+	return newID("RULE")
+}
+
 func newID(prefix string) string {
 	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, 3)

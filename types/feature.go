@@ -4,14 +4,15 @@ package types
 type FeatureKind string
 
 const (
-	KindFeature FeatureKind = "feature"
-	KindBug     FeatureKind = "bug"
-	KindHotfix  FeatureKind = "hotfix"
-	KindChore   FeatureKind = "chore"
+	KindFeature  FeatureKind = "feature"
+	KindBug      FeatureKind = "bug"
+	KindHotfix   FeatureKind = "hotfix"
+	KindChore    FeatureKind = "chore"
+	KindTestcase FeatureKind = "testcase"
 )
 
 // ValidKinds is the set of valid FeatureKind values for validation.
-var ValidKinds = []string{"feature", "bug", "hotfix", "chore"}
+var ValidKinds = []string{"feature", "bug", "hotfix", "chore", "testcase"}
 
 // FeatureStatus represents the current state of a feature in the workflow.
 type FeatureStatus string

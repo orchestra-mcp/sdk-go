@@ -195,6 +195,75 @@ func FormatProjectListMD(projects []*types.ProjectData) string {
 	return b.String()
 }
 
+// FormatPersonMD formats a single person as a Markdown block.
+func FormatPersonMD(p *types.PersonData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", p.ID, p.Name)
+	fmt.Fprintf(&b, "- **Role:** %s\n", p.Role)
+	fmt.Fprintf(&b, "- **Status:** %s\n", p.Status)
+	if p.Email != "" {
+		fmt.Fprintf(&b, "- **Email:** %s\n", p.Email)
+	}
+	if p.Bio != "" {
+		fmt.Fprintf(&b, "- **Bio:** %s\n", p.Bio)
+	}
+	if p.GithubEmail != "" {
+		fmt.Fprintf(&b, "- **GitHub Email:** %s\n", p.GithubEmail)
+	}
+	if len(p.Integrations) > 0 {
+		for k, v := range p.Integrations {
+			fmt.Fprintf(&b, "- **%s:** %s\n", k, v)
+		}
+	}
+	if len(p.Labels) > 0 {
+		fmt.Fprintf(&b, "- **Labels:** %s\n", strings.Join(p.Labels, ", "))
+	}
+	return b.String()
+}
+
+// FormatPersonListMD formats a list of persons as a Markdown table.
+func FormatPersonListMD(persons []*types.PersonData, header string) string {
+	if len(persons) == 0 {
+		return fmt.Sprintf("## %s\n\nNo persons found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(persons))
+	fmt.Fprintf(&b, "| ID | Name | Role | Status | Email |\n")
+	fmt.Fprintf(&b, "|----|------|------|--------|-------|\n")
+	for _, p := range persons {
+		email := p.Email
+		if email == "" {
+			email = "—"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", p.ID, p.Name, p.Role, p.Status, email)
+	}
+	return b.String()
+}
+
+// FormatAssignmentRuleMD formats a single assignment rule as a Markdown block.
+func FormatAssignmentRuleMD(r *types.AssignmentRuleData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s\n", r.ID)
+	fmt.Fprintf(&b, "- **Kind:** %s\n", r.Kind)
+	fmt.Fprintf(&b, "- **Assigned to:** %s\n", r.PersonID)
+	return b.String()
+}
+
+// FormatAssignmentRuleListMD formats a list of assignment rules as a Markdown table.
+func FormatAssignmentRuleListMD(rules []*types.AssignmentRuleData, header string) string {
+	if len(rules) == 0 {
+		return fmt.Sprintf("## %s\n\nNo assignment rules found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(rules))
+	fmt.Fprintf(&b, "| ID | Kind | Person ID |\n")
+	fmt.Fprintf(&b, "|----|------|-----------|\n")
+	for _, r := range rules {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", r.ID, r.Kind, r.PersonID)
+	}
+	return b.String()
+}
+
 // FormatStatusCountsMD formats status counts as a Markdown table.
 func FormatStatusCountsMD(counts map[string]int, total int) string {
 	var b strings.Builder
