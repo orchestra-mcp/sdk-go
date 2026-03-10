@@ -18,18 +18,22 @@ var ValidKinds = []string{"feature", "bug", "hotfix", "chore", "testcase"}
 type FeatureStatus string
 
 const (
-	StatusBacklog         FeatureStatus = "backlog"
-	StatusTodo            FeatureStatus = "todo"
-	StatusInProgress      FeatureStatus = "in-progress"
-	StatusReadyForTesting FeatureStatus = "ready-for-testing"
-	StatusInTesting       FeatureStatus = "in-testing"
-	StatusReadyForDocs    FeatureStatus = "ready-for-docs"
-	StatusInDocs          FeatureStatus = "in-docs"
-	StatusDocumented      FeatureStatus = "documented"
-	StatusInReview        FeatureStatus = "in-review"
-	StatusNeedsEdits      FeatureStatus = "needs-edits"
-	StatusDone            FeatureStatus = "done"
+	StatusTodo       FeatureStatus = "todo"
+	StatusInProgress FeatureStatus = "in-progress"
+	StatusInTesting  FeatureStatus = "in-testing"
+	StatusInDocs     FeatureStatus = "in-docs"
+	StatusInReview   FeatureStatus = "in-review"
+	StatusNeedsEdits FeatureStatus = "needs-edits"
+	StatusDone       FeatureStatus = "done"
 )
+
+// Legacy status aliases for migration. Old statuses are mapped to new ones on read.
+var LegacyStatusMap = map[FeatureStatus]FeatureStatus{
+	"backlog":           StatusTodo,
+	"ready-for-testing": StatusInTesting,
+	"ready-for-docs":    StatusInDocs,
+	"documented":        StatusInReview,
+}
 
 // FeatureData represents a feature within a project.
 type FeatureData struct {

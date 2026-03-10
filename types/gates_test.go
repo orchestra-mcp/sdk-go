@@ -7,41 +7,116 @@ import (
 	"github.com/orchestra-mcp/sdk-go/types"
 )
 
-func TestGetGateGatedTransition(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
+// ---------------------------------------------------------------------------
+// 1. GetGate — gated transitions
+// ---------------------------------------------------------------------------
+
+func TestGetGateCodeComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
 	if gate == nil {
-		t.Fatal("expected gate for in-progress -> ready-for-testing")
+		t.Fatal("expected gate for in-progress -> in-testing")
 	}
-	if gate.ID != types.GateImplementation {
-		t.Errorf("expected GateImplementation, got %s", gate.ID)
+	if gate.ID != types.GateCodeComplete {
+		t.Errorf("expected GateCodeComplete, got %s", gate.ID)
 	}
-	if gate.Name != "Implementation Complete" {
-		t.Errorf("expected 'Implementation Complete', got %s", gate.Name)
+	if gate.Name != "Code Complete" {
+		t.Errorf("expected 'Code Complete', got %s", gate.Name)
+	}
+	if gate.RequiredSection != "Changes" {
+		t.Errorf("expected RequiredSection 'Changes', got %s", gate.RequiredSection)
 	}
 }
 
-func TestGetGateFreeTransition(t *testing.T) {
-	gate := types.GetGate(types.StatusBacklog, types.StatusTodo)
-	if gate != nil {
-		t.Fatal("expected no gate for backlog -> todo")
+func TestGetGateTestComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInDocs)
+	if gate == nil {
+		t.Fatal("expected gate for in-testing -> in-docs")
+	}
+	if gate.ID != types.GateTestComplete {
+		t.Errorf("expected GateTestComplete, got %s", gate.ID)
+	}
+	if gate.Name != "Test Complete" {
+		t.Errorf("expected 'Test Complete', got %s", gate.Name)
+	}
+	if gate.RequiredSection != "Results" {
+		t.Errorf("expected RequiredSection 'Results', got %s", gate.RequiredSection)
 	}
 }
+
+func TestGetGateTestCompleteSkipDocs(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-testing -> in-review")
+	}
+	if gate.ID != types.GateTestComplete {
+		t.Errorf("expected GateTestComplete, got %s", gate.ID)
+	}
+	if gate.Name != "Test Complete (skip docs)" {
+		t.Errorf("expected 'Test Complete (skip docs)', got %s", gate.Name)
+	}
+}
+
+func TestGetGateDocsComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-docs -> in-review")
+	}
+	if gate.ID != types.GateDocsComplete {
+		t.Errorf("expected GateDocsComplete, got %s", gate.ID)
+	}
+	if gate.Name != "Docs Complete" {
+		t.Errorf("expected 'Docs Complete', got %s", gate.Name)
+	}
+	if gate.DocsFolder != "docs" {
+		t.Errorf("expected DocsFolder 'docs', got %s", gate.DocsFolder)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 2. GetGate — free transitions return nil
+// ---------------------------------------------------------------------------
+
+func TestGetGateFreeTransition(t *testing.T) {
+	free := []struct {
+		from types.FeatureStatus
+		to   types.FeatureStatus
+	}{
+		{types.StatusTodo, types.StatusInProgress},
+		{types.StatusNeedsEdits, types.StatusInProgress},
+	}
+	for _, tt := range free {
+		t.Run(string(tt.from)+"->"+string(tt.to), func(t *testing.T) {
+			gate := types.GetGate(tt.from, tt.to)
+			if gate != nil {
+				t.Errorf("expected no gate for %s -> %s, got %+v", tt.from, tt.to, gate)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 3. IsGated — exhaustive check of all transitions
+// ---------------------------------------------------------------------------
 
 func TestIsGated(t *testing.T) {
 	tests := []struct {
-		from   types.FeatureStatus
-		to     types.FeatureStatus
-		gated  bool
+		from  types.FeatureStatus
+		to    types.FeatureStatus
+		gated bool
 	}{
-		{types.StatusInProgress, types.StatusReadyForTesting, true},
-		{types.StatusInTesting, types.StatusReadyForDocs, true},
-		{types.StatusInDocs, types.StatusDocumented, true},
-		{types.StatusBacklog, types.StatusTodo, false},
+		// Gated transitions.
+		{types.StatusInProgress, types.StatusInTesting, true},
+		{types.StatusInTesting, types.StatusInDocs, true},
+		{types.StatusInTesting, types.StatusInReview, true},
+		{types.StatusInDocs, types.StatusInReview, true},
+
+		// Free transitions.
 		{types.StatusTodo, types.StatusInProgress, false},
-		{types.StatusReadyForTesting, types.StatusInTesting, false},
-		{types.StatusReadyForDocs, types.StatusInDocs, false},
-		{types.StatusDocumented, types.StatusInReview, false},
 		{types.StatusNeedsEdits, types.StatusInProgress, false},
+
+		// Non-existent transitions.
+		{types.StatusDone, types.StatusTodo, false},
+		{types.StatusInReview, types.StatusDone, false},
 	}
 
 	for _, tt := range tests {
@@ -54,8 +129,12 @@ func TestIsGated(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 4. Validate — empty evidence
+// ---------------------------------------------------------------------------
+
 func TestGateValidateEmptyEvidence(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
 	err := gate.Validate("")
 	if err == nil {
 		t.Fatal("expected error for empty evidence")
@@ -65,141 +144,95 @@ func TestGateValidateEmptyEvidence(t *testing.T) {
 	}
 }
 
-func TestGateValidateTooShort(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	err := gate.Validate("done")
+func TestGateValidateWhitespaceOnlyEvidence(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	err := gate.Validate("   \n\n  \t  ")
 	if err == nil {
-		t.Fatal("expected error for too-short evidence")
+		t.Fatal("expected error for whitespace-only evidence")
 	}
-	if !strings.Contains(err.Error(), "too short") {
-		t.Errorf("expected 'too short' in error, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "requires evidence") {
+		t.Errorf("expected 'requires evidence' in error, got: %s", err.Error())
 	}
 }
 
-func TestGateValidateMissingSections(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Long enough (>100 chars) but no sections.
-	err := gate.Validate("This is a long enough string but has no markdown section headers at all. It needs to be over one hundred characters to pass the total length check first.")
-	if err == nil {
-		t.Fatal("expected error for missing sections")
-	}
-	if !strings.Contains(err.Error(), "missing required sections") {
-		t.Errorf("expected 'missing required sections' in error, got: %s", err.Error())
-	}
-}
+// ---------------------------------------------------------------------------
+// 5. Validate — too-short section content
+// ---------------------------------------------------------------------------
 
-func TestGateValidatePartialSections(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Has Summary but missing Changes and Verification. Must be >100 chars total.
-	err := gate.Validate("## Summary\nImplemented the login flow with full OAuth2 support including token refresh, PKCE verification, and comprehensive error handling.\n")
+func TestGateValidateTooShortSectionContent(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	// Has the required section but content is under 10 characters.
+	err := gate.Validate("## Changes\nshort")
 	if err == nil {
-		t.Fatal("expected error for partial sections")
-	}
-	if !strings.Contains(err.Error(), "Changes") {
-		t.Errorf("expected missing 'Changes' in error, got: %s", err.Error())
-	}
-}
-
-func TestGateValidateEmptySectionContent(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Must be >100 chars total to pass MinTotalLen. Changes section is empty.
-	err := gate.Validate("## Summary\nImplemented the full login flow with OAuth2 and JWT tokens.\n\n## Changes\n\n\n## Verification\nRun the entire test suite to verify all endpoints work correctly.")
-	if err == nil {
-		t.Fatal("expected error for empty section content")
+		t.Fatal("expected error for too-short section content")
 	}
 	if !strings.Contains(err.Error(), "insufficient content") {
 		t.Errorf("expected 'insufficient content' in error, got: %s", err.Error())
 	}
 }
 
-func TestGateValidatePassesWithValidEvidence(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	evidence := "## Summary\nImplemented the OAuth2 login flow with JWT tokens.\n\n## Changes\n- auth/handler.go (added login endpoint)\n- auth/service.go (token generation)\n\n## Verification\nCall POST /api/auth/login with valid credentials."
+// ---------------------------------------------------------------------------
+// 6. Validate — missing required section
+// ---------------------------------------------------------------------------
+
+func TestGateValidateMissingRequiredSection(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	// Has a section, but not the required "Changes" section.
+	err := gate.Validate("## Summary\nImplemented the OAuth2 login flow with full support for JWT token refresh and PKCE verification.")
+	if err == nil {
+		t.Fatal("expected error for missing required section")
+	}
+	if !strings.Contains(err.Error(), "missing required section") {
+		t.Errorf("expected 'missing required section' in error, got: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Changes") {
+		t.Errorf("expected 'Changes' in error, got: %s", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 7. Validate — passes with valid evidence (file paths included)
+// ---------------------------------------------------------------------------
+
+func TestGateValidatePassesCodeComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	evidence := "## Changes\n- auth/handler.go (added login endpoint)\n- auth/service.go (token generation logic)\n"
 	err := gate.Validate(evidence)
 	if err != nil {
 		t.Fatalf("expected valid evidence to pass, got: %v", err)
 	}
 }
 
-func TestGateValidateCaseInsensitiveSections(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	evidence := "## summary\nImplemented the OAuth2 login flow with JWT tokens.\n\n## changes\n- auth/handler.go (added login endpoint)\n\n## verification\nCall POST /api/auth/login with valid credentials."
+func TestGateValidatePassesTestComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInDocs)
+	evidence := "## Results\nAll 12 test cases pass. See auth/handler_test.go for details.\n"
 	err := gate.Validate(evidence)
 	if err != nil {
-		t.Fatalf("expected case-insensitive sections to pass, got: %v", err)
+		t.Fatalf("expected valid test evidence to pass, got: %v", err)
 	}
 }
 
-func TestGate2TestingComplete(t *testing.T) {
-	gate := types.GetGate(types.StatusInTesting, types.StatusReadyForDocs)
-	if gate == nil {
-		t.Fatal("expected gate for in-testing -> ready-for-docs")
-	}
-	if gate.ID != types.GateTesting {
-		t.Errorf("expected GateTesting, got %s", gate.ID)
-	}
-
-	// Valid evidence.
-	err := gate.Validate("## Summary\nTested all API endpoints and edge cases.\n\n## Results\nAll 15 test cases passed without failures.\n\n## Coverage\n87% line coverage across the auth module.")
+func TestGateValidatePassesDocsComplete(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	evidence := "## Docs\nAdded docs/api/auth.md with full endpoint documentation.\n"
+	err := gate.Validate(evidence)
 	if err != nil {
-		t.Fatalf("expected valid testing evidence to pass, got: %v", err)
-	}
-
-	// Missing Results section. Must be >100 chars total.
-	err = gate.Validate("## Summary\nTested all API endpoints and edge cases for the authentication module.\n\n## Coverage\nFull line and branch coverage of the auth module including error paths.")
-	if err == nil {
-		t.Fatal("expected error for missing Results section")
+		t.Fatalf("expected valid docs evidence to pass, got: %v", err)
 	}
 }
 
-func TestGate3DocumentationComplete(t *testing.T) {
-	gate := types.GetGate(types.StatusInDocs, types.StatusDocumented)
-	if gate == nil {
-		t.Fatal("expected gate for in-docs -> documented")
-	}
-	if gate.ID != types.GateDocumentation {
-		t.Errorf("expected GateDocumentation, got %s", gate.ID)
-	}
-
-	// Valid evidence.
-	err := gate.Validate("## Summary\nDocumented all auth endpoints and setup guide.\n\n## Location\ndocs/api/auth.md and README.md setup section.")
+func TestGateValidateCaseInsensitiveSections(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	evidence := "## changes\n- auth/handler.go (added login endpoint)\n- auth/service.go (token generation)\n"
+	err := gate.Validate(evidence)
 	if err != nil {
-		t.Fatalf("expected valid doc evidence to pass, got: %v", err)
-	}
-
-	// Missing Location. Must be >80 chars total for Gate 3.
-	err = gate.Validate("## Summary\nDocumented the entire auth system thoroughly including all endpoints, configuration, and setup instructions.")
-	if err == nil {
-		t.Fatal("expected error for missing Location section")
-	}
-}
-
-func TestReviewGate(t *testing.T) {
-	gate := types.ReviewGate
-	if gate == nil {
-		t.Fatal("expected ReviewGate to be defined")
-	}
-	if gate.ID != types.GateReviewSelfCheck {
-		t.Errorf("expected GateReviewSelfCheck, got %s", gate.ID)
-	}
-
-	// Valid self-review.
-	err := gate.Validate("## Summary\nOAuth2 login feature with JWT tokens.\n\n## Quality\nCode follows project conventions, no known issues.\n\n## Checklist\n- [x] auth/handler.go — login endpoint implemented\n- [x] auth/handler_test.go — tests written and passing")
-	if err != nil {
-		t.Fatalf("expected valid self-review to pass, got: %v", err)
-	}
-
-	// Missing Quality. Must be >120 chars total for ReviewGate.
-	err = gate.Validate("## Summary\nOAuth2 login feature with JWT tokens and refresh flow.\n\n## Checklist\n- [x] auth/handler.go - Login endpoint implemented and tested with comprehensive edge cases")
-	if err == nil {
-		t.Fatal("expected error for missing Quality section")
+		t.Fatalf("expected case-insensitive section matching to pass, got: %v", err)
 	}
 }
 
 func TestGateValidateRejectsEvidenceWithoutFilePaths(t *testing.T) {
-	gate := types.GetGate(types.StatusInProgress, types.StatusReadyForTesting)
-	// Evidence with all sections but no file paths in Changes.
-	evidence := "## Summary\nImplemented the login flow with full support.\n\n## Changes\nAdded the login endpoint and token generation logic\n\n## Verification\nCall the login endpoint with valid credentials."
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	evidence := "## Changes\nAdded the login endpoint and token generation logic to the auth module\n"
 	err := gate.Validate(evidence)
 	if err == nil {
 		t.Fatal("expected error for Changes section without file paths")
@@ -209,38 +242,284 @@ func TestGateValidateRejectsEvidenceWithoutFilePaths(t *testing.T) {
 	}
 }
 
-func TestGate3RejectsLocationWithoutFilePaths(t *testing.T) {
-	gate := types.GetGate(types.StatusInDocs, types.StatusDocumented)
-	evidence := "## Summary\nDocumented the auth system thoroughly.\n\n## Location\nThe documentation is in the docs folder and the README."
+func TestGateValidateDocsRejectsWithoutFilePaths(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	evidence := "## Docs\nThe documentation has been written and covers all endpoints thoroughly.\n"
 	err := gate.Validate(evidence)
 	if err == nil {
-		t.Fatal("expected error for Location section without file paths")
+		t.Fatal("expected error for Docs section without file paths")
 	}
 	if !strings.Contains(err.Error(), "file path") {
 		t.Errorf("expected 'file path' in error, got: %s", err.Error())
 	}
 }
 
-func TestAllGatesHaveChecklistsAndSections(t *testing.T) {
-	for from, toMap := range types.GateRequirements {
-		for to, gate := range toMap {
-			if gate.Checklist == "" {
-				t.Errorf("gate %s -> %s has empty checklist", from, to)
+// ---------------------------------------------------------------------------
+// 8. CheckFileTypes — test gate (matching and non-matching patterns)
+// ---------------------------------------------------------------------------
+
+func TestCheckFileTypesTestGateMatching(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInDocs)
+	if gate == nil {
+		t.Fatal("expected gate for in-testing -> in-docs")
+	}
+
+	matching := []string{
+		"## Results\nAll tests pass. See auth/handler_test.go for verification.\n",
+		"## Results\nFull coverage. Check src/auth.test.ts for unit tests.\n",
+		"## Results\nIntegration tests at features/login.spec.ts pass.\n",
+		"## Results\nRust tests pass: src/parser_test.rs confirmed correct.\n",
+		"## Results\nJS tests pass: src/utils.test.js verified output.\n",
+		"## Results\nPython tests pass: tests/test_auth.test.py verified.\n",
+	}
+	for _, evidence := range matching {
+		ok, expected := gate.CheckFileTypes(evidence)
+		if !ok {
+			t.Errorf("expected match for evidence %q, wanted patterns %v", evidence, expected)
+		}
+	}
+}
+
+func TestCheckFileTypesTestGateNonMatching(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInDocs)
+	if gate == nil {
+		t.Fatal("expected gate for in-testing -> in-docs")
+	}
+
+	// File paths that do not match any test file pattern.
+	evidence := "## Results\nVerified output by running src/handler.go manually.\n"
+	ok, expected := gate.CheckFileTypes(evidence)
+	if ok {
+		t.Error("expected non-match for evidence referencing only .go (not _test.go)")
+	}
+	if len(expected) == 0 {
+		t.Error("expected non-empty expected patterns on mismatch")
+	}
+}
+
+func TestCheckFileTypesNoPatterns(t *testing.T) {
+	// Code complete gate has no FilePatterns and no DocsFolder.
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	if gate == nil {
+		t.Fatal("expected gate for in-progress -> in-testing")
+	}
+
+	ok, expected := gate.CheckFileTypes("## Changes\n- src/main.go updated\n")
+	if !ok {
+		t.Errorf("gate with no patterns should always match, got expected=%v", expected)
+	}
+	if expected != nil {
+		t.Errorf("expected nil patterns slice, got %v", expected)
+	}
+}
+
+func TestCheckFileTypesNoPaths(t *testing.T) {
+	gate := types.GetGate(types.StatusInTesting, types.StatusInDocs)
+	// Evidence with the right section but no file paths at all.
+	evidence := "## Results\nAll tests pass with full coverage across the module.\n"
+	ok, expected := gate.CheckFileTypes(evidence)
+	if ok {
+		t.Error("expected non-match when no file paths are present")
+	}
+	if len(expected) == 0 {
+		t.Error("expected non-empty expected patterns")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 9. CheckFileTypes — docs gate (matching and non-matching patterns)
+// ---------------------------------------------------------------------------
+
+func TestCheckFileTypesDocsGateMatching(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-docs -> in-review")
+	}
+
+	evidence := "## Docs\nAdded endpoint documentation at docs/api/auth.md with examples.\n"
+	ok, _ := gate.CheckFileTypes(evidence)
+	if !ok {
+		t.Error("expected match for docs/api/auth.md under docs/ folder")
+	}
+}
+
+func TestCheckFileTypesDocsGateNonMatching(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-docs -> in-review")
+	}
+
+	// File not under docs/ folder.
+	evidence := "## Docs\nUpdated README.md with the new auth setup instructions.\n"
+	ok, expected := gate.CheckFileTypes(evidence)
+	if ok {
+		t.Error("expected non-match for file not under docs/ folder")
+	}
+	if len(expected) == 0 {
+		t.Error("expected non-empty expected patterns on mismatch")
+	}
+}
+
+func TestCheckFileTypesDocsGateNonMdFile(t *testing.T) {
+	gate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-docs -> in-review")
+	}
+
+	// File under docs/ but not a .md file.
+	evidence := "## Docs\nAdded docs/diagrams/arch.png for architecture diagram.\n"
+	ok, expected := gate.CheckFileTypes(evidence)
+	if ok {
+		t.Error("expected non-match for non-.md file under docs/")
+	}
+	if len(expected) == 0 {
+		t.Error("expected non-empty expected patterns on mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 10. ExtractFilePaths
+// ---------------------------------------------------------------------------
+
+func TestExtractFilePaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		expected []string
+	}{
+		{
+			name:     "go files",
+			text:     "Modified auth/handler.go and auth/service.go",
+			expected: []string{"auth/handler.go", "auth/service.go"},
+		},
+		{
+			name:     "markdown list",
+			text:     "- libs/sdk-go/types/gates.go (added validation)\n- libs/sdk-go/types/gates_test.go (new tests)",
+			expected: []string{"libs/sdk-go/types/gates.go", "libs/sdk-go/types/gates_test.go"},
+		},
+		{
+			name:     "relative paths",
+			text:     "Updated ./src/main.go and ../config.yaml",
+			expected: []string{"./src/main.go", "../config.yaml"},
+		},
+		{
+			name:     "deduplication",
+			text:     "Changed auth/handler.go twice, see auth/handler.go for details",
+			expected: []string{"auth/handler.go"},
+		},
+		{
+			name:     "no paths",
+			text:     "All tests pass with full coverage",
+			expected: nil,
+		},
+		{
+			name:     "various extensions",
+			text:     "Updated src/app.ts, src/style.css, docs/README.md",
+			expected: []string{"src/app.ts", "src/style.css", "docs/README.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := types.ExtractFilePaths(tt.text)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("ExtractFilePaths() returned %d paths %v, want %d paths %v",
+					len(got), got, len(tt.expected), tt.expected)
 			}
-			if len(gate.RequiredSections) == 0 {
-				t.Errorf("gate %s -> %s has no required sections", from, to)
+			for i, path := range got {
+				if path != tt.expected[i] {
+					t.Errorf("path[%d] = %q, want %q", i, path, tt.expected[i])
+				}
 			}
-			if gate.Name == "" {
-				t.Errorf("gate %s -> %s has empty name", from, to)
-			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 11. IsSkippableFor — docs gate skippable for bug/hotfix/testcase
+// ---------------------------------------------------------------------------
+
+func TestDocsGateSkippableForBugHotfixTestcase(t *testing.T) {
+	// The in-docs -> in-review gate (DocsComplete) should be skippable.
+	docsGate := types.GetGate(types.StatusInDocs, types.StatusInReview)
+	if docsGate == nil {
+		t.Fatal("expected gate for in-docs -> in-review")
+	}
+
+	skippable := []types.FeatureKind{types.KindBug, types.KindHotfix, types.KindTestcase}
+	for _, kind := range skippable {
+		if !docsGate.IsSkippableFor(kind) {
+			t.Errorf("docs gate should be skippable for kind %q", kind)
 		}
 	}
 
-	// Also check ReviewGate.
-	if types.ReviewGate.Checklist == "" {
-		t.Error("ReviewGate has empty checklist")
+	notSkippable := []types.FeatureKind{types.KindFeature, types.KindChore}
+	for _, kind := range notSkippable {
+		if docsGate.IsSkippableFor(kind) {
+			t.Errorf("docs gate should NOT be skippable for kind %q", kind)
+		}
 	}
-	if len(types.ReviewGate.RequiredSections) == 0 {
-		t.Error("ReviewGate has no required sections")
+}
+
+func TestTestCompleteSkipDocsGateSkippable(t *testing.T) {
+	// The in-testing -> in-review gate (skip docs path) should also be skippable.
+	gate := types.GetGate(types.StatusInTesting, types.StatusInReview)
+	if gate == nil {
+		t.Fatal("expected gate for in-testing -> in-review")
+	}
+
+	skippable := []types.FeatureKind{types.KindBug, types.KindHotfix, types.KindTestcase}
+	for _, kind := range skippable {
+		if !gate.IsSkippableFor(kind) {
+			t.Errorf("test-complete skip-docs gate should be skippable for kind %q", kind)
+		}
+	}
+
+	if gate.IsSkippableFor(types.KindFeature) {
+		t.Error("test-complete skip-docs gate should NOT be skippable for kind 'feature'")
+	}
+}
+
+func TestCodeCompleteGateNotSkippable(t *testing.T) {
+	gate := types.GetGate(types.StatusInProgress, types.StatusInTesting)
+	if gate == nil {
+		t.Fatal("expected gate for in-progress -> in-testing")
+	}
+
+	allKinds := []types.FeatureKind{
+		types.KindFeature, types.KindBug, types.KindHotfix,
+		types.KindChore, types.KindTestcase,
+	}
+	for _, kind := range allKinds {
+		if gate.IsSkippableFor(kind) {
+			t.Errorf("code-complete gate should NOT be skippable for any kind, but was for %q", kind)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Structural: every gate in the map has required fields populated
+// ---------------------------------------------------------------------------
+
+func TestAllGatesHaveRequiredFields(t *testing.T) {
+	for from, toMap := range types.GateRequirements {
+		for to, gate := range toMap {
+			label := string(from) + " -> " + string(to)
+			if gate.Name == "" {
+				t.Errorf("gate %s has empty Name", label)
+			}
+			if gate.ID == "" {
+				t.Errorf("gate %s has empty ID", label)
+			}
+			if gate.RequiredSection == "" {
+				t.Errorf("gate %s has empty RequiredSection", label)
+			}
+			if gate.From != from {
+				t.Errorf("gate %s has From=%s, want %s", label, gate.From, from)
+			}
+			if gate.To != to {
+				t.Errorf("gate %s has To=%s, want %s", label, gate.To, to)
+			}
+		}
 	}
 }

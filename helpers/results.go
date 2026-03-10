@@ -190,7 +190,7 @@ func FormatProjectListMD(projects []*types.ProjectData) string {
 		if p.Description != "" {
 			desc = " — " + p.Description
 		}
-		fmt.Fprintf(&b, "- **%s**%s\n", p.Name, desc)
+		fmt.Fprintf(&b, "- **%s** (`%s`)%s\n", p.Name, p.Slug, desc)
 	}
 	return b.String()
 }

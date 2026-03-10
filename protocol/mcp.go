@@ -16,6 +16,7 @@ type MCPInitializeResult struct {
 	ProtocolVersion string                `json:"protocolVersion"`
 	Capabilities    MCPServerCapabilities `json:"capabilities"`
 	ServerInfo      MCPServerInfo         `json:"serverInfo"`
+	SessionID       string                `json:"_sessionId,omitempty"`
 }
 
 // MCPServerInfo identifies the MCP server.

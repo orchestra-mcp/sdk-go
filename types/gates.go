@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -10,28 +11,24 @@ import (
 type GateID string
 
 const (
-	GateImplementation  GateID = "implementation"
-	GateTesting         GateID = "testing"
-	GateDocumentation   GateID = "documentation"
-	GateReviewSelfCheck GateID = "review_self_check"
+	GateCodeComplete GateID = "code_complete"
+	GateTestComplete GateID = "test_complete"
+	GateDocsComplete GateID = "docs_complete"
 )
 
 // GateRequirement defines what evidence is needed to pass through a gated
-// workflow transition. Evidence is validated by checking for required markdown
-// sections (## headers) with minimum content, and optionally requiring that
-// specific sections reference actual file paths.
+// workflow transition. Evidence is validated by checking for a required markdown
+// section (## header) that must reference file paths.
 type GateRequirement struct {
 	ID                GateID
 	From              FeatureStatus
 	To                FeatureStatus
 	Name              string
-	RequiredSections  []string      // section names (without "## " prefix)
-	FilePathSections  []string      // sections that MUST contain at least one file path
-	MinSectionLen     int           // minimum characters of content per section
-	MinTotalLen       int           // minimum total characters across all evidence (0 = no check)
-	MinFilePaths      int           // minimum distinct file paths required in FilePathSections (0 = just 1)
+	RequiredSection   string        // section name (without "## " prefix)
+	MinFilePaths      int           // minimum distinct file paths required
+	FilePatterns      []string      // expected file patterns for validation (empty = any)
+	DocsFolder        string        // if set, file paths must be under this folder
 	SkippableForKinds []FeatureKind // gate can be auto-passed for these kinds
-	Checklist         string        // markdown checklist returned to the agent on rejection
 }
 
 // filePathPattern matches common file path patterns:
@@ -40,6 +37,77 @@ type GateRequirement struct {
 // - relative paths: ./src/main.go, ../config.yaml
 var filePathPattern = regexp.MustCompile(`(?:^|[\s` + "`" + `\-*])([.\w][\w./\-]*\.\w{1,10})(?:\s|$|[,:;()\]` + "`" + `])`)
 
+// Validate checks whether the provided evidence satisfies this gate's
+// requirements. Returns nil if passed, or an error describing what is missing.
+func (g *GateRequirement) Validate(evidence string) error {
+	trimmed := strings.TrimSpace(evidence)
+	if trimmed == "" {
+		return fmt.Errorf("gate %q requires evidence with a ## %s section listing file paths", g.Name, g.RequiredSection)
+	}
+
+	// Parse sections from evidence.
+	sections := parseSections(trimmed)
+	content, found := sections[strings.ToLower(g.RequiredSection)]
+	if !found {
+		return fmt.Errorf("evidence missing required section: ## %s", g.RequiredSection)
+	}
+	if len(strings.TrimSpace(content)) < 10 {
+		return fmt.Errorf("section ## %s has insufficient content (minimum 10 characters)", g.RequiredSection)
+	}
+
+	// Count file paths.
+	minPaths := g.MinFilePaths
+	if minPaths <= 0 {
+		minPaths = 1
+	}
+	paths := ExtractFilePaths(content)
+	if len(paths) < minPaths {
+		return fmt.Errorf("section ## %s must reference at least %d file path(s) (found %d). "+
+			"List the actual files changed, e.g.: src/main.go, tests/auth_test.go",
+			g.RequiredSection, minPaths, len(paths))
+	}
+
+	return nil
+}
+
+// CheckFileTypes validates that extracted file paths match the expected patterns
+// for this gate. Returns (true, nil) if at least one file matches or no patterns
+// are configured. Returns (false, expectedPatterns) if none match.
+func (g *GateRequirement) CheckFileTypes(evidence string) (ok bool, expected []string) {
+	if len(g.FilePatterns) == 0 && g.DocsFolder == "" {
+		return true, nil
+	}
+
+	sections := parseSections(strings.TrimSpace(evidence))
+	content := sections[strings.ToLower(g.RequiredSection)]
+	paths := ExtractFilePaths(content)
+
+	if len(paths) == 0 {
+		return false, g.FilePatterns
+	}
+
+	// Check docs folder constraint.
+	if g.DocsFolder != "" {
+		for _, p := range paths {
+			if strings.HasPrefix(p, g.DocsFolder+"/") || strings.HasPrefix(p, g.DocsFolder+"\\") {
+				if strings.HasSuffix(strings.ToLower(p), ".md") {
+					return true, nil
+				}
+			}
+		}
+		return false, []string{g.DocsFolder + "/*.md"}
+	}
+
+	// Check file patterns.
+	for _, p := range paths {
+		for _, pattern := range g.FilePatterns {
+			if matchesFilePattern(p, pattern) {
+				return true, nil
+			}
+		}
+	}
+	return false, g.FilePatterns
+}
 
 // IsSkippableFor reports whether this gate can be auto-passed for the given kind.
 func (g *GateRequirement) IsSkippableFor(kind FeatureKind) bool {
@@ -51,96 +119,48 @@ func (g *GateRequirement) IsSkippableFor(kind FeatureKind) bool {
 	return false
 }
 
-// Validate checks whether the provided evidence satisfies this gate's
-// requirements. Returns nil if the evidence passes, or an error describing
-// what is missing. Validation is agnostic — it checks structure (sections
-// present with substance), not domain-specific content.
-func (g *GateRequirement) Validate(evidence string) error {
-	trimmed := strings.TrimSpace(evidence)
-	if trimmed == "" {
-		return fmt.Errorf("gate %q requires evidence — call get_gate_requirements to see what is needed", g.Name)
-	}
-	if len(trimmed) < 30 {
-		return fmt.Errorf("evidence too short: gate %q requires at least 30 characters (got %d)", g.Name, len(trimmed))
-	}
+// matchesFilePattern checks if a file path matches a pattern suffix.
+// e.g., "_test.go" matches "src/auth_test.go"
+func matchesFilePattern(path, pattern string) bool {
+	lower := strings.ToLower(path)
+	lowerPattern := strings.ToLower(pattern)
 
-	// Check minimum total evidence length if configured.
-	if g.MinTotalLen > 0 && len(trimmed) < g.MinTotalLen {
-		return fmt.Errorf("evidence too short: gate %q requires at least %d characters total (got %d). "+
-			"Provide detailed, substantive evidence that reflects real work performed",
-			g.Name, g.MinTotalLen, len(trimmed))
-	}
-
-	minLen := g.MinSectionLen
-	if minLen == 0 {
-		minLen = 10
-	}
-
-	// Parse sections from evidence.
-	sections := parseSections(trimmed)
-
-	var missing []string
-	var tooShort []string
-	for _, required := range g.RequiredSections {
-		content, found := sections[strings.ToLower(required)]
-		if !found {
-			missing = append(missing, required)
-			continue
+	// Glob-style pattern (e.g., "docs/*.md")
+	if strings.Contains(lowerPattern, "*") {
+		matched, _ := filepath.Match(lowerPattern, lower)
+		if matched {
+			return true
 		}
-		if len(strings.TrimSpace(content)) < minLen {
-			tooShort = append(tooShort, required)
+		// Also try just the filename
+		matched, _ = filepath.Match(lowerPattern, filepath.Base(lower))
+		return matched
+	}
+
+	// Suffix match (e.g., "_test.go" matches "src/auth_test.go")
+	return strings.HasSuffix(lower, lowerPattern)
+}
+
+// ExtractFilePaths extracts unique file paths from text.
+func ExtractFilePaths(text string) []string {
+	matches := filePathPattern.FindAllStringSubmatch(text, -1)
+	seen := make(map[string]bool)
+	var paths []string
+	for _, m := range matches {
+		if len(m) > 1 && !seen[m[1]] {
+			seen[m[1]] = true
+			paths = append(paths, m[1])
 		}
 	}
-
-	if len(missing) > 0 {
-		return fmt.Errorf("evidence missing required sections: %s. Each section must start with '## SectionName'",
-			strings.Join(missing, ", "))
-	}
-	if len(tooShort) > 0 {
-		return fmt.Errorf("sections with insufficient content (minimum %d chars each): %s",
-			minLen, strings.Join(tooShort, ", "))
-	}
-
-	// Validate that file-path-required sections contain minimum distinct file paths.
-	minPaths := g.MinFilePaths
-	if minPaths <= 0 {
-		minPaths = 1
-	}
-	var tooFewFiles []string
-	for _, reqSection := range g.FilePathSections {
-		content, found := sections[strings.ToLower(reqSection)]
-		if !found {
-			continue // already caught by missing sections check above
-		}
-		paths := CountDistinctFilePaths(content)
-		if paths < minPaths {
-			tooFewFiles = append(tooFewFiles, fmt.Sprintf("%s (found %d, need %d)", reqSection, paths, minPaths))
-		}
-	}
-	if len(tooFewFiles) > 0 {
-		return fmt.Errorf("sections must reference at least %d distinct file path(s) (e.g., src/main.go, docs/README.md): %s. "+
-			"Evidence must reflect real file changes, not just prose descriptions",
-			minPaths, strings.Join(tooFewFiles, ", "))
-	}
-
-	return nil
+	return paths
 }
 
 // CountDistinctFilePaths counts the number of unique file paths matched in text.
 func CountDistinctFilePaths(text string) int {
-	matches := filePathPattern.FindAllStringSubmatch(text, -1)
-	seen := make(map[string]bool)
-	for _, m := range matches {
-		if len(m) > 1 {
-			seen[m[1]] = true
-		}
-	}
-	return len(seen)
+	return len(ExtractFilePaths(text))
 }
 
 // parseSections extracts markdown sections from evidence text. Returns a map
-// of lowercase section name → section content (text between this header and
-// the next header or end of string).
+// of lowercase section name → section content.
 func parseSections(text string) map[string]string {
 	sections := make(map[string]string)
 	lines := strings.Split(text, "\n")
@@ -151,7 +171,6 @@ func parseSections(text string) map[string]string {
 	for _, line := range lines {
 		trimLine := strings.TrimSpace(line)
 		if strings.HasPrefix(trimLine, "## ") {
-			// Save previous section if any.
 			if currentSection != "" {
 				sections[currentSection] = currentContent.String()
 			}
@@ -165,7 +184,6 @@ func parseSections(text string) map[string]string {
 		}
 	}
 
-	// Save last section.
 	if currentSection != "" {
 		sections[currentSection] = currentContent.String()
 	}
@@ -173,131 +191,52 @@ func parseSections(text string) map[string]string {
 	return sections
 }
 
-// GateRequirements maps gated transitions to their requirements. Only
-// transitions that appear in this map require evidence; all others are free.
+// GateRequirements maps gated transitions to their requirements.
+// Only transitions in this map require evidence; all others are free.
 var GateRequirements = map[FeatureStatus]map[FeatureStatus]*GateRequirement{
 	StatusInProgress: {
-		StatusReadyForTesting: {
-			ID:               GateImplementation,
-			From:             StatusInProgress,
-			To:               StatusReadyForTesting,
-			Name:             "Implementation Complete",
-			RequiredSections: []string{"Summary", "Changes", "Verification"},
-			FilePathSections: []string{"Changes"},
-			MinSectionLen:    20,
-			MinTotalLen:      100,
-			MinFilePaths:     1,
-			Checklist: `## Gate 1: Implementation Complete
-
-Before advancing from **in-progress** to **ready-for-testing**, provide evidence with these sections:
-
-### Required Sections
-- **## Summary** — What was implemented? Describe the changes at a high level.
-- **## Changes** — What files were modified or created? **Must include actual file paths** (e.g., ` + "`" + `libs/sdk-go/types/gates.go` + "`" + `).
-- **## Verification** — How can someone verify this works? Steps to test.
-
-### Evidence Format
-` + "```" + `
-evidence: "## Summary\n<describe what was built>\n\n## Changes\n- libs/foo/bar.go (added validation)\n- libs/baz/qux.go (new file)\n\n## Verification\n<describe how to test>"
-` + "```" + `
-
-Each section must have at least 20 characters of content, and total evidence must be at least 100 characters. The **Changes** section must reference actual file paths.
-
-**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates. Evidence is checked for substance — templated or copied evidence will be rejected.`,
+		StatusInTesting: {
+			ID:              GateCodeComplete,
+			From:            StatusInProgress,
+			To:              StatusInTesting,
+			Name:            "Code Complete",
+			RequiredSection: "Changes",
+			MinFilePaths:    1,
 		},
 	},
 	StatusInTesting: {
-		StatusReadyForDocs: {
-			ID:               GateTesting,
-			From:             StatusInTesting,
-			To:               StatusReadyForDocs,
-			Name:             "Testing Complete",
-			RequiredSections: []string{"Summary", "Results", "Coverage"},
-			MinSectionLen:    20,
-			MinTotalLen:      100,
-			Checklist: `## Gate 2: Testing Complete
-
-Before advancing from **in-testing** to **ready-for-docs**, provide evidence with these sections:
-
-### Required Sections
-- **## Summary** — What was tested? Describe the testing scope.
-- **## Results** — What were the outcomes? Pass/fail, issues found.
-- **## Coverage** — What is the test coverage? Areas covered and any gaps.
-
-### Evidence Format
-` + "```" + `
-evidence: "## Summary\n<describe testing scope>\n\n## Results\n<describe outcomes>\n\n## Coverage\n<describe coverage>"
-` + "```" + `
-
-Each section must have at least 20 characters of content, and total evidence must be at least 100 characters.
-
-**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.`,
+		StatusInDocs: {
+			ID:              GateTestComplete,
+			From:            StatusInTesting,
+			To:              StatusInDocs,
+			Name:            "Test Complete",
+			RequiredSection: "Results",
+			MinFilePaths:    1,
+			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py"},
+		},
+		StatusInReview: {
+			ID:              GateTestComplete,
+			From:            StatusInTesting,
+			To:              StatusInReview,
+			Name:            "Test Complete (skip docs)",
+			RequiredSection: "Results",
+			MinFilePaths:    1,
+			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py"},
+			SkippableForKinds: []FeatureKind{KindBug, KindHotfix, KindTestcase},
 		},
 	},
 	StatusInDocs: {
-		StatusDocumented: {
-			ID:                GateDocumentation,
-			From:              StatusInDocs,
-			To:                StatusDocumented,
-			Name:              "Documentation Complete",
-			RequiredSections:  []string{"Summary", "Location"},
-			FilePathSections:  []string{"Location"},
-			MinSectionLen:     20,
-			MinTotalLen:       80,
-			MinFilePaths:      1,
+		StatusInReview: {
+			ID:              GateDocsComplete,
+			From:            StatusInDocs,
+			To:              StatusInReview,
+			Name:            "Docs Complete",
+			RequiredSection: "Docs",
+			MinFilePaths:    1,
+			DocsFolder:      "docs",
 			SkippableForKinds: []FeatureKind{KindBug, KindHotfix, KindTestcase},
-			Checklist: `## Gate 3: Documentation Complete
-
-Before advancing from **in-docs** to **documented**, provide evidence with these sections:
-
-### Required Sections
-- **## Summary** — What was documented? Describe the scope.
-- **## Location** — Where do the docs live? **Must include actual file paths** to the documentation files (e.g., ` + "`" + `docs/feature-x.md` + "`" + `).
-
-### Evidence Format
-` + "```" + `
-evidence: "## Summary\n<describe what was documented>\n\n## Location\n- docs/feature-x.md (new)\n- CHANGELOG.md (updated)"
-` + "```" + `
-
-Each section must have at least 20 characters of content, and total evidence must be at least 80 characters. The **Location** section must reference actual file paths.
-
-**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.`,
 		},
 	},
-}
-
-// ReviewGate defines the self-review evidence required when requesting a
-// human review via request_review. This is separate from GateRequirements
-// because it applies to the request_review tool, not advance_feature.
-var ReviewGate = &GateRequirement{
-	ID:               GateReviewSelfCheck,
-	From:             StatusDocumented,
-	To:               StatusInReview,
-	Name:             "Self-Review",
-	RequiredSections: []string{"Summary", "Quality", "Checklist"},
-	FilePathSections: []string{"Checklist"},
-	MinSectionLen:    20,
-	MinTotalLen:      120,
-	MinFilePaths:     1,
-	Checklist: `## Gate 4: Self-Review (before human review)
-
-Before requesting a human review, provide your self-review evidence with these sections:
-
-### Required Sections
-- **## Summary** — What is this feature? Brief description of the deliverable.
-- **## Quality** — Your assessment of the work quality. Any concerns?
-- **## Checklist** — What was completed? **Must reference actual files** that were created or modified.
-
-### Evidence Format
-` + "```" + `
-evidence: "## Summary\n<what this feature does>\n\n## Quality\n<your quality assessment>\n\n## Checklist\n- [x] libs/foo/bar.go — added validation\n- [x] docs/feature.md — documentation"
-` + "```" + `
-
-Each section must have at least 20 characters of content, and total evidence must be at least 120 characters. The **Checklist** section must reference actual file paths.
-
-**Anti-bypass:** Do NOT use sleep/wait to bypass gate cooldowns. Do real work between gates.
-
-After this, the MCP will instruct you to ask the user for final approval.`,
 }
 
 // GetGate returns the gate requirement for a given transition, or nil if the

@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS workspaces (
     last_used TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS session_locks (
+    feature_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    locked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (project_id, feature_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_locks_session ON session_locks(session_id);
 `
 
 // DB returns the global database singleton at ~/.orchestra/db/global.db.
