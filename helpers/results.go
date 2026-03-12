@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	pluginv1 "github.com/orchestra-mcp/gen-go/orchestra/plugin/v1"
+	"github.com/orchestra-mcp/sdk-go/globaldb"
 	"github.com/orchestra-mcp/sdk-go/types"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -103,6 +104,48 @@ func FormatFeatureListMD(features []*types.FeatureData, header string) string {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", f.ID, f.Title, f.Status, f.Priority, kind, assignee)
 	}
 	return b.String()
+}
+
+// FormatFeatureListMDWithLocks formats a feature list annotating any in-progress
+// features that are locked by a different session with "[locked by other session]".
+// This prevents a new session from mistakenly treating another session's active
+// feature as its own work.
+func FormatFeatureListMDWithLocks(features []*types.FeatureData, header, projectID, sessionID string) string {
+	if len(features) == 0 {
+		return fmt.Sprintf("## %s\n\nNo features found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(features))
+	fmt.Fprintf(&b, "| ID | Title | Status | Priority | Kind | Assignee |\n")
+	fmt.Fprintf(&b, "|----|-------|--------|----------|------|----------|\n")
+	for _, f := range features {
+		assignee := f.Assignee
+		if assignee == "" {
+			assignee = "—"
+		}
+		kind := string(f.Kind)
+		if kind == "" {
+			kind = "feature"
+		}
+		status := string(f.Status)
+		// Annotate in-progress/in-testing/in-docs/in-review features locked by another session.
+		if sessionID != "" && isActiveFeatureStatus(f.Status) {
+			if lock, _ := globaldb.GetLockInfo(projectID, f.ID); lock != nil && lock.SessionID != sessionID {
+				status = status + " [locked by other session]"
+			}
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", f.ID, f.Title, status, f.Priority, kind, assignee)
+	}
+	return b.String()
+}
+
+// isActiveFeatureStatus returns true for statuses that can hold a session lock.
+func isActiveFeatureStatus(s types.FeatureStatus) bool {
+	switch s {
+	case types.StatusInProgress, types.StatusInTesting, types.StatusInDocs, types.StatusInReview:
+		return true
+	}
+	return false
 }
 
 // FormatPlanMD formats a single plan as a Markdown block.
