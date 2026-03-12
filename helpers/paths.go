@@ -21,6 +21,18 @@ const (
 	// AssignmentRulesDir is the subdirectory within a project that holds assignment rule files.
 	AssignmentRulesDir = "assignment-rules"
 
+	// HypothesesDir is the subdirectory within a project that holds hypothesis files.
+	HypothesesDir = "hypotheses"
+
+	// ExperimentsDir is the subdirectory within a project that holds experiment files.
+	ExperimentsDir = "experiments"
+
+	// DiscoveryCyclesDir is the subdirectory within a project that holds discovery cycle files.
+	DiscoveryCyclesDir = "discovery-cycles"
+
+	// DiscoveryReviewsDir is the subdirectory within a project that holds discovery review files.
+	DiscoveryReviewsDir = "discovery-reviews"
+
 	// ConfigFile is the name of the project configuration file.
 	ConfigFile = "project.json"
 )
@@ -58,6 +70,34 @@ func PersonPath(projectSlug, personID string) string {
 // .projects/{slug}/assignment-rules/{id}.md
 func AssignmentRulePath(projectSlug, ruleID string) string {
 	return filepath.Join(ProjectsDir, projectSlug, AssignmentRulesDir, ruleID+".md")
+}
+
+// HypothesisPath returns the file path for a hypothesis within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/hypotheses/{id}.md
+func HypothesisPath(projectSlug, hypoID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, HypothesesDir, hypoID+".md")
+}
+
+// ExperimentPath returns the file path for an experiment within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/experiments/{id}.md
+func ExperimentPath(projectSlug, exprID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, ExperimentsDir, exprID+".md")
+}
+
+// DiscoveryCyclePath returns the file path for a discovery cycle within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/discovery-cycles/{id}.md
+func DiscoveryCyclePath(projectSlug, cycleID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, DiscoveryCyclesDir, cycleID+".md")
+}
+
+// DiscoveryReviewPath returns the file path for a discovery review within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/discovery-reviews/{id}.md
+func DiscoveryReviewPath(projectSlug, reviewID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, DiscoveryReviewsDir, reviewID+".md")
 }
 
 // ProjectPath returns the directory path for a project.

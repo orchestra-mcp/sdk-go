@@ -264,6 +264,186 @@ func FormatAssignmentRuleListMD(rules []*types.AssignmentRuleData, header string
 	return b.String()
 }
 
+// FormatHypothesisMD formats a single hypothesis as a Markdown block.
+func FormatHypothesisMD(h *types.HypothesisData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", h.ID, h.Title)
+	fmt.Fprintf(&b, "- **Status:** %s\n", h.Status)
+	fmt.Fprintf(&b, "- **Problem:** %s\n", h.Problem)
+	fmt.Fprintf(&b, "- **Target User:** %s\n", h.TargetUser)
+	fmt.Fprintf(&b, "- **Assumption:** %s\n", h.Assumption)
+	if h.CycleID != "" {
+		fmt.Fprintf(&b, "- **Cycle:** %s\n", h.CycleID)
+	}
+	if h.RefinedFrom != "" {
+		fmt.Fprintf(&b, "- **Refined from:** %s\n", h.RefinedFrom)
+	}
+	if len(h.Experiments) > 0 {
+		fmt.Fprintf(&b, "- **Experiments:** %s\n", strings.Join(h.Experiments, ", "))
+	}
+	if len(h.Labels) > 0 {
+		fmt.Fprintf(&b, "- **Labels:** %s\n", strings.Join(h.Labels, ", "))
+	}
+	return b.String()
+}
+
+// FormatHypothesisListMD formats a list of hypotheses as a Markdown table.
+func FormatHypothesisListMD(hypotheses []*types.HypothesisData, header string) string {
+	if len(hypotheses) == 0 {
+		return fmt.Sprintf("## %s\n\nNo hypotheses found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(hypotheses))
+	fmt.Fprintf(&b, "| ID | Title | Status | Target User | Cycle |\n")
+	fmt.Fprintf(&b, "|----|-------|--------|-------------|-------|\n")
+	for _, h := range hypotheses {
+		cycle := h.CycleID
+		if cycle == "" {
+			cycle = "—"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", h.ID, h.Title, h.Status, h.TargetUser, cycle)
+	}
+	return b.String()
+}
+
+// FormatExperimentMD formats a single experiment as a Markdown block.
+func FormatExperimentMD(e *types.ExperimentData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", e.ID, e.Title)
+	fmt.Fprintf(&b, "- **Status:** %s\n", e.Status)
+	fmt.Fprintf(&b, "- **Kind:** %s\n", e.Kind)
+	fmt.Fprintf(&b, "- **Hypothesis:** %s\n", e.HypothesisID)
+	fmt.Fprintf(&b, "- **Question:** %s\n", e.Question)
+	fmt.Fprintf(&b, "- **Method:** %s\n", e.Method)
+	fmt.Fprintf(&b, "- **Success Signal:** %s\n", e.SuccessSignal)
+	fmt.Fprintf(&b, "- **Kill Condition:** %s\n", e.KillCondition)
+	if e.CycleID != "" {
+		fmt.Fprintf(&b, "- **Cycle:** %s\n", e.CycleID)
+	}
+	if e.KillTriggered {
+		fmt.Fprintf(&b, "- **Kill Triggered:** yes\n")
+	}
+	if e.Outcome != "" {
+		fmt.Fprintf(&b, "- **Outcome:** %s\n", e.Outcome)
+	}
+	if len(e.Signals) > 0 {
+		fmt.Fprintf(&b, "\n**Signals (%d):**\n", len(e.Signals))
+		for _, sig := range e.Signals {
+			fmt.Fprintf(&b, "- [%s] %s: expected=%s, actual=%s (confidence: %s)\n",
+				sig.Type, sig.Metric, sig.Expected, sig.Actual, sig.Confidence)
+		}
+	}
+	if len(e.SpawnedFeatures) > 0 {
+		fmt.Fprintf(&b, "- **Spawned Features:** %s\n", strings.Join(e.SpawnedFeatures, ", "))
+	}
+	if len(e.Labels) > 0 {
+		fmt.Fprintf(&b, "- **Labels:** %s\n", strings.Join(e.Labels, ", "))
+	}
+	return b.String()
+}
+
+// FormatExperimentListMD formats a list of experiments as a Markdown table.
+func FormatExperimentListMD(experiments []*types.ExperimentData, header string) string {
+	if len(experiments) == 0 {
+		return fmt.Sprintf("## %s\n\nNo experiments found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(experiments))
+	fmt.Fprintf(&b, "| ID | Title | Kind | Status | Hypothesis | Signals |\n")
+	fmt.Fprintf(&b, "|----|-------|------|--------|------------|--------|\n")
+	for _, e := range experiments {
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d |\n",
+			e.ID, e.Title, e.Kind, e.Status, e.HypothesisID, len(e.Signals))
+	}
+	return b.String()
+}
+
+// FormatDiscoveryCycleMD formats a single discovery cycle as a Markdown block.
+func FormatDiscoveryCycleMD(c *types.DiscoveryCycleData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", c.ID, c.Title)
+	fmt.Fprintf(&b, "- **Status:** %s\n", c.Status)
+	fmt.Fprintf(&b, "- **Goal:** %s\n", c.Goal)
+	fmt.Fprintf(&b, "- **Period:** %s to %s\n", c.StartDate, c.EndDate)
+	if len(c.Hypotheses) > 0 {
+		fmt.Fprintf(&b, "- **Hypotheses:** %s\n", strings.Join(c.Hypotheses, ", "))
+	}
+	if len(c.Experiments) > 0 {
+		fmt.Fprintf(&b, "- **Experiments:** %s\n", strings.Join(c.Experiments, ", "))
+	}
+	if c.Learnings != "" {
+		fmt.Fprintf(&b, "- **Learnings:** %s\n", c.Learnings)
+	}
+	if c.Decision != "" {
+		fmt.Fprintf(&b, "- **Decision:** %s\n", c.Decision)
+	}
+	return b.String()
+}
+
+// FormatDiscoveryCycleListMD formats a list of discovery cycles as a Markdown table.
+func FormatDiscoveryCycleListMD(cycles []*types.DiscoveryCycleData, header string) string {
+	if len(cycles) == 0 {
+		return fmt.Sprintf("## %s\n\nNo discovery cycles found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(cycles))
+	fmt.Fprintf(&b, "| ID | Title | Status | Period | Decision |\n")
+	fmt.Fprintf(&b, "|----|-------|--------|--------|----------|\n")
+	for _, c := range cycles {
+		decision := c.Decision
+		if decision == "" {
+			decision = "—"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s–%s | %s |\n",
+			c.ID, c.Title, c.Status, c.StartDate, c.EndDate, decision)
+	}
+	return b.String()
+}
+
+// FormatDiscoveryReviewMD formats a single discovery review as a Markdown block.
+func FormatDiscoveryReviewMD(r *types.DiscoveryReviewData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s — %s\n", r.ID, r.Title)
+	fmt.Fprintf(&b, "- **Cycle:** %s\n", r.CycleID)
+	if r.Surprises != "" {
+		fmt.Fprintf(&b, "- **Surprises:** %s\n", r.Surprises)
+	}
+	if r.WrongAbout != "" {
+		fmt.Fprintf(&b, "- **Wrong About:** %s\n", r.WrongAbout)
+	}
+	if r.TransitionReady {
+		fmt.Fprintf(&b, "- **Transition Ready:** yes\n")
+	}
+	if len(r.Items) > 0 {
+		fmt.Fprintf(&b, "\n**Decisions (%d):**\n", len(r.Items))
+		for _, item := range r.Items {
+			fmt.Fprintf(&b, "- %s (%s): **%s** — %s\n",
+				item.ItemID, item.ItemType, item.Decision, item.Rationale)
+		}
+	}
+	return b.String()
+}
+
+// FormatDiscoveryReviewListMD formats a list of discovery reviews as a Markdown table.
+func FormatDiscoveryReviewListMD(reviews []*types.DiscoveryReviewData, header string) string {
+	if len(reviews) == 0 {
+		return fmt.Sprintf("## %s\n\nNo discovery reviews found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(reviews))
+	fmt.Fprintf(&b, "| ID | Title | Cycle | Items | Transition Ready |\n")
+	fmt.Fprintf(&b, "|----|-------|-------|-------|------------------|\n")
+	for _, r := range reviews {
+		ready := "no"
+		if r.TransitionReady {
+			ready = "yes"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %d | %s |\n",
+			r.ID, r.Title, r.CycleID, len(r.Items), ready)
+	}
+	return b.String()
+}
+
 // FormatStatusCountsMD formats status counts as a Markdown table.
 func FormatStatusCountsMD(counts map[string]int, total int) string {
 	var b strings.Builder
