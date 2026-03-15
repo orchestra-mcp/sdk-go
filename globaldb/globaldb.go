@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +65,20 @@ CREATE TABLE IF NOT EXISTS session_locks (
     PRIMARY KEY (project_id, feature_id)
 );
 CREATE INDEX IF NOT EXISTS idx_session_locks_session ON session_locks(session_id);
+
+CREATE TABLE IF NOT EXISTS secrets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT DEFAULT 'general',
+    value TEXT NOT NULL DEFAULT '',
+    description TEXT DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    scope TEXT DEFAULT 'global',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_secrets_category ON secrets(category);
+CREATE INDEX IF NOT EXISTS idx_secrets_scope ON secrets(scope);
 `
 
 // DB returns the global database singleton at ~/.orchestra/db/global.db.
@@ -227,11 +242,14 @@ func CreateAccount(acct *Account) error {
 	if acct.Config == nil {
 		acct.Config = make(map[string]string)
 	}
-	cfgJSON, _ := json.Marshal(acct.Config)
+	cfgEncrypted, err := encryptConfig(acct.Config)
+	if err != nil {
+		return fmt.Errorf("encrypt config: %w", err)
+	}
 	_, err = db.Exec(`INSERT INTO accounts (id, name, provider, auth_method, config, default_model,
 		max_budget_usd, alert_at_pct, used_budget_usd, total_tokens_in, total_tokens_out,
 		total_sessions, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		acct.ID, acct.Name, acct.Provider, acct.AuthMethod, string(cfgJSON), acct.DefaultModel,
+		acct.ID, acct.Name, acct.Provider, acct.AuthMethod, cfgEncrypted, acct.DefaultModel,
 		acct.MaxBudgetUSD, acct.AlertAtPct, acct.UsedBudgetUSD, acct.TotalTokensIn,
 		acct.TotalTokensOut, acct.TotalSessions, acct.Status, acct.CreatedAt)
 	return err
@@ -254,8 +272,10 @@ func GetAccount(id string) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("account %q not found", id)
 	}
-	acct.Config = make(map[string]string)
-	json.Unmarshal([]byte(cfgJSON), &acct.Config)
+	acct.Config, err = decryptConfig(cfgJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt config: %w", err)
+	}
 	return &acct, nil
 }
 
@@ -283,8 +303,7 @@ func ListAccounts() ([]*Account, error) {
 			&acct.CreatedAt); err != nil {
 			continue
 		}
-		acct.Config = make(map[string]string)
-		json.Unmarshal([]byte(cfgJSON), &acct.Config)
+		acct.Config, _ = decryptConfig(cfgJSON)
 		result = append(result, &acct)
 	}
 	return result, nil
@@ -306,11 +325,14 @@ func SaveAccount(acct *Account) error {
 	if err != nil {
 		return err
 	}
-	cfgJSON, _ := json.Marshal(acct.Config)
+	cfgEncrypted, err := encryptConfig(acct.Config)
+	if err != nil {
+		return fmt.Errorf("encrypt config: %w", err)
+	}
 	_, err = db.Exec(`UPDATE accounts SET name=?, provider=?, auth_method=?, config=?,
 		default_model=?, max_budget_usd=?, alert_at_pct=?, used_budget_usd=?,
 		total_tokens_in=?, total_tokens_out=?, total_sessions=?, status=? WHERE id=?`,
-		acct.Name, acct.Provider, acct.AuthMethod, string(cfgJSON), acct.DefaultModel,
+		acct.Name, acct.Provider, acct.AuthMethod, cfgEncrypted, acct.DefaultModel,
 		acct.MaxBudgetUSD, acct.AlertAtPct, acct.UsedBudgetUSD, acct.TotalTokensIn,
 		acct.TotalTokensOut, acct.TotalSessions, acct.Status, acct.ID)
 	return err
@@ -515,6 +537,282 @@ func MigrateWorkspacesJSON() {
 	if reg.ActiveWorkspaceID != "" {
 		SetActiveWorkspaceID(reg.ActiveWorkspaceID)
 	}
+}
+
+// --- Secret helpers ---
+
+// Secret represents an encrypted key-value secret stored in globaldb.
+type Secret struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Category    string   `json:"category"`
+	Value       string   `json:"value"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Scope       string   `json:"scope"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+// CreateSecret inserts a new secret with its value encrypted.
+func CreateSecret(s *Secret) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	if s.CreatedAt == "" {
+		now := time.Now().UTC().Format(time.RFC3339)
+		s.CreatedAt = now
+		s.UpdatedAt = now
+	}
+	if s.Category == "" {
+		s.Category = "general"
+	}
+	if s.Scope == "" {
+		s.Scope = "global"
+	}
+	if s.Tags == nil {
+		s.Tags = []string{}
+	}
+	encValue, err := encryptString(s.Value)
+	if err != nil {
+		return fmt.Errorf("encrypt secret: %w", err)
+	}
+	tagsJSON, _ := json.Marshal(s.Tags)
+	_, err = db.Exec(`INSERT INTO secrets (id, name, category, value, description, tags, scope, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.Name, s.Category, encValue, s.Description, string(tagsJSON), s.Scope, s.CreatedAt, s.UpdatedAt)
+	return err
+}
+
+// GetSecret returns a single secret by ID with its value decrypted.
+func GetSecret(id string) (*Secret, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var s Secret
+	var encValue, tagsJSON string
+	err = db.QueryRow(`SELECT id, name, category, value, description, tags, scope, created_at, updated_at
+		FROM secrets WHERE id = ?`, id).Scan(
+		&s.ID, &s.Name, &s.Category, &encValue, &s.Description, &tagsJSON, &s.Scope, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("secret %q not found", id)
+	}
+	s.Value, err = decryptString(encValue)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt secret: %w", err)
+	}
+	s.Tags = []string{}
+	json.Unmarshal([]byte(tagsJSON), &s.Tags)
+	return &s, nil
+}
+
+// ListSecrets returns all secrets (values are NOT decrypted — masked).
+func ListSecrets() ([]*Secret, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT id, name, category, description, tags, scope, created_at, updated_at FROM secrets`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*Secret
+	for rows.Next() {
+		var s Secret
+		var tagsJSON string
+		if err := rows.Scan(&s.ID, &s.Name, &s.Category, &s.Description, &tagsJSON, &s.Scope, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			continue
+		}
+		s.Tags = []string{}
+		json.Unmarshal([]byte(tagsJSON), &s.Tags)
+		s.Value = "****" // Never return plaintext in list
+		result = append(result, &s)
+	}
+	return result, nil
+}
+
+// ListSecretsByCategory returns secrets filtered by category.
+func ListSecretsByCategory(category string) ([]*Secret, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT id, name, category, description, tags, scope, created_at, updated_at
+		FROM secrets WHERE category = ?`, category)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*Secret
+	for rows.Next() {
+		var s Secret
+		var tagsJSON string
+		if err := rows.Scan(&s.ID, &s.Name, &s.Category, &s.Description, &tagsJSON, &s.Scope, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			continue
+		}
+		s.Tags = []string{}
+		json.Unmarshal([]byte(tagsJSON), &s.Tags)
+		s.Value = "****"
+		result = append(result, &s)
+	}
+	return result, nil
+}
+
+// UpdateSecret modifies an existing secret via a mutation function.
+func UpdateSecret(id string, fn func(s *Secret)) error {
+	s, err := GetSecret(id)
+	if err != nil {
+		return err
+	}
+	fn(s)
+	return SaveSecret(s)
+}
+
+// SaveSecret writes the full secret back to the database.
+func SaveSecret(s *Secret) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	s.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	encValue, err := encryptString(s.Value)
+	if err != nil {
+		return fmt.Errorf("encrypt secret: %w", err)
+	}
+	tagsJSON, _ := json.Marshal(s.Tags)
+	_, err = db.Exec(`UPDATE secrets SET name=?, category=?, value=?, description=?, tags=?, scope=?, updated_at=?
+		WHERE id=?`, s.Name, s.Category, encValue, s.Description, string(tagsJSON), s.Scope, s.UpdatedAt, s.ID)
+	return err
+}
+
+// DeleteSecret removes a secret by ID.
+func DeleteSecret(id string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	res, err := db.Exec(`DELETE FROM secrets WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("secret %q not found", id)
+	}
+	return nil
+}
+
+// SearchSecrets searches secrets by name or description substring.
+func SearchSecrets(query string) ([]*Secret, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	like := "%" + query + "%"
+	rows, err := db.Query(`SELECT id, name, category, description, tags, scope, created_at, updated_at
+		FROM secrets WHERE name LIKE ? OR description LIKE ? OR tags LIKE ?`, like, like, like)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*Secret
+	for rows.Next() {
+		var s Secret
+		var tagsJSON string
+		if err := rows.Scan(&s.ID, &s.Name, &s.Category, &s.Description, &tagsJSON, &s.Scope, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			continue
+		}
+		s.Tags = []string{}
+		json.Unmarshal([]byte(tagsJSON), &s.Tags)
+		s.Value = "****"
+		result = append(result, &s)
+	}
+	return result, nil
+}
+
+// GetSecretEnv returns secrets in a given scope as key=value pairs (for .env export).
+func GetSecretEnv(scope string) (map[string]string, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT name, value FROM secrets`
+	args := []any{}
+	if scope != "" && scope != "all" {
+		query += ` WHERE scope = ?`
+		args = append(args, scope)
+	}
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	env := make(map[string]string)
+	for rows.Next() {
+		var name, encValue string
+		if rows.Scan(&name, &encValue) != nil {
+			continue
+		}
+		val, err := decryptString(encValue)
+		if err != nil {
+			continue
+		}
+		env[name] = val
+	}
+	return env, nil
+}
+
+// MigrateEnvFile imports secrets from a .env file into globaldb.
+func MigrateEnvFile(data []byte, category, scope string) (int, error) {
+	if category == "" {
+		category = "env"
+	}
+	if scope == "" {
+		scope = "global"
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		// Strip surrounding quotes.
+		val = strings.Trim(val, `"'`)
+		id := "SEC-" + randomID(4)
+		s := &Secret{
+			ID:       id,
+			Name:     key,
+			Category: category,
+			Value:    val,
+			Scope:    scope,
+			Tags:     []string{"imported"},
+		}
+		if err := CreateSecret(s); err != nil {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
+// randomID generates n random uppercase ASCII letters.
+func randomID(n int) string {
+	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		time.Sleep(time.Nanosecond)
+	}
+	return string(b)
 }
 
 // MigrateMeJSON imports me.json current user mappings into globaldb if empty.

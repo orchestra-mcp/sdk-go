@@ -7,6 +7,26 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// Input length limits.
+const (
+	MaxProjectIDLen   = 64
+	MaxFeatureTitleLen = 500
+	MaxNoteBodyLen    = 100 * 1024 // 100 KB
+	MaxSearchQueryLen = 1000
+	MaxStoragePathLen = 4096
+	MaxLabelLen       = 128
+	MaxDescriptionLen = 50 * 1024 // 50 KB
+)
+
+// ValidateLength checks that s does not exceed maxLen bytes.
+// fieldName is used in the error message.
+func ValidateLength(s, fieldName string, maxLen int) error {
+	if len(s) > maxLen {
+		return fmt.Errorf("%s exceeds maximum length (%d > %d)", fieldName, len(s), maxLen)
+	}
+	return nil
+}
+
 // ValidateRequired checks that all named fields exist in the Struct and have
 // non-empty string values. Returns an error listing all missing or empty fields.
 func ValidateRequired(args *structpb.Struct, fields ...string) error {
