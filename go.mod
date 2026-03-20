@@ -22,7 +22,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
