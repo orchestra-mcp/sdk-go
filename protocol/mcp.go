@@ -1,7 +1,7 @@
 package protocol
 
 // MCPProtocolVersion is the MCP protocol version supported by this server.
-const MCPProtocolVersion = "2025-06-18"
+const MCPProtocolVersion = "2025-11-25"
 
 // MCPServerCapabilities describes the capabilities the MCP server supports.
 type MCPServerCapabilities struct {
@@ -25,28 +25,61 @@ type MCPInitializeResult struct {
 }
 
 // MCPServerInfo identifies the MCP server.
+// Extended in MCP 2025-11-25 with title, description, icons, and websiteUrl.
 type MCPServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name        string    `json:"name"`
+	Version     string    `json:"version"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Icons       []MCPIcon `json:"icons,omitempty"`
+	WebsiteURL  string    `json:"websiteUrl,omitempty"`
+}
+
+// MCPIcon represents an icon for a server, tool, resource, or prompt.
+// Added in MCP 2025-11-25.
+type MCPIcon struct {
+	Src      string   `json:"src"`
+	MimeType string   `json:"mimeType,omitempty"`
+	Sizes    []string `json:"sizes,omitempty"`
+}
+
+// MCPToolAnnotations provides hints about a tool's behavior.
+// Added in MCP 2025-11-25.
+type MCPToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 
 // MCPToolDefinition describes a single tool for the MCP tools/list response.
+// Extended in MCP 2025-11-25 with title, icons, outputSchema, and annotations.
 type MCPToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"inputSchema"`
+	Name         string              `json:"name"`
+	Title        string              `json:"title,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Icons        []MCPIcon           `json:"icons,omitempty"`
+	InputSchema  any                 `json:"inputSchema"`
+	OutputSchema any                 `json:"outputSchema,omitempty"`
+	Annotations  *MCPToolAnnotations `json:"annotations,omitempty"`
 }
 
 // MCPToolResult is the response to an MCP tools/call request.
 type MCPToolResult struct {
-	Content []MCPContent `json:"content"`
-	IsError bool         `json:"isError,omitempty"`
+	Content []MCPContent   `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
+	Meta    map[string]any `json:"_meta,omitempty"` // Rich UI metadata (populated by WebGate for UI clients)
 }
 
-// MCPContent is a single content block in a tool result.
+// MCPContent is a single content block in a tool result or prompt message.
+// Extended in MCP 2025-11-25 with image, audio, and resource_link support.
 type MCPContent struct {
-	Type string `json:"type"` // "text"
-	Text string `json:"text"`
+	Type     string `json:"type"`               // "text", "image", "audio", "resource_link"
+	Text     string `json:"text,omitempty"`     // for type "text"
+	Data     string `json:"data,omitempty"`     // base64-encoded for type "image" or "audio"
+	MimeType string `json:"mimeType,omitempty"` // for type "image" or "audio"
+	URI      string `json:"uri,omitempty"`      // for type "resource_link"
 }
 
 // MCPResourcesCapability describes resource-related capabilities.
@@ -56,19 +89,23 @@ type MCPResourcesCapability struct {
 }
 
 // MCPResource describes a single resource for the MCP resources/list response.
+// Extended in MCP 2025-11-25 with icons.
 type MCPResource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URI         string    `json:"uri"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	MimeType    string    `json:"mimeType,omitempty"`
+	Icons       []MCPIcon `json:"icons,omitempty"`
 }
 
 // MCPResourceTemplate describes a URI template for resource discovery.
+// Extended in MCP 2025-11-25 with icons.
 type MCPResourceTemplate struct {
-	URITemplate string `json:"uriTemplate"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URITemplate string    `json:"uriTemplate"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	MimeType    string    `json:"mimeType,omitempty"`
+	Icons       []MCPIcon `json:"icons,omitempty"`
 }
 
 // MCPResourceContent is a single content block returned by resources/read.
@@ -126,9 +163,11 @@ type MCPPromptsCapability struct {
 }
 
 // MCPPromptDefinition describes a single prompt for the MCP prompts/list response.
+// Extended in MCP 2025-11-25 with icons.
 type MCPPromptDefinition struct {
 	Name        string              `json:"name"`
 	Description string              `json:"description,omitempty"`
+	Icons       []MCPIcon           `json:"icons,omitempty"`
 	Arguments   []MCPPromptArgument `json:"arguments,omitempty"`
 }
 

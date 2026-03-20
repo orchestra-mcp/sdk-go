@@ -59,26 +59,6 @@ func NewRuleID() string {
 	return newID("RULE")
 }
 
-// NewHypothesisID generates a hypothesis ID in the format "HYPO-XXX".
-func NewHypothesisID() string {
-	return newID("HYPO")
-}
-
-// NewExperimentID generates an experiment ID in the format "EXPR-XXX".
-func NewExperimentID() string {
-	return newID("EXPR")
-}
-
-// NewDiscoveryCycleID generates a discovery cycle ID in the format "DISC-XXX".
-func NewDiscoveryCycleID() string {
-	return newID("DISC")
-}
-
-// NewDiscoveryReviewID generates a discovery review ID in the format "DREV-XXX".
-func NewDiscoveryReviewID() string {
-	return newID("DREV")
-}
-
 // NewDelegationID generates a delegation ID in the format "DEL-XXX".
 func NewDelegationID() string {
 	return newID("DEL")
