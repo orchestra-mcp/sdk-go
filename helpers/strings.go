@@ -79,6 +79,16 @@ func NewDiscoveryReviewID() string {
 	return newID("DREV")
 }
 
+// NewDelegationID generates a delegation ID in the format "DEL-XXX".
+func NewDelegationID() string {
+	return newID("DEL")
+}
+
+// NewWorkflowID generates a workflow ID in the format "WFL-XXX".
+func NewWorkflowID() string {
+	return newID("WFL")
+}
+
 func newID(prefix string) string {
 	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	b := make([]byte, 3)

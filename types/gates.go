@@ -212,7 +212,7 @@ var GateRequirements = map[FeatureStatus]map[FeatureStatus]*GateRequirement{
 			Name:            "Test Complete",
 			RequiredSection: "Results",
 			MinFilePaths:    1,
-			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py"},
+			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py", "_test.dart", "Test.swift", "Tests.swift", "Spec.swift", "Test.kt", "Tests.kt", "Spec.kt", "Test.java", "Tests.java", ".test.rb", "_spec.rb", "Test.cs", "Tests.cs"},
 		},
 		StatusInReview: {
 			ID:              GateTestComplete,
@@ -221,7 +221,7 @@ var GateRequirements = map[FeatureStatus]map[FeatureStatus]*GateRequirement{
 			Name:            "Test Complete (skip docs)",
 			RequiredSection: "Results",
 			MinFilePaths:    1,
-			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py"},
+			FilePatterns:    []string{"_test.go", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "_test.rs", ".test.js", ".spec.js", ".test.py", "_test.py", "_test.dart", "Test.swift", "Tests.swift", "Spec.swift", "Test.kt", "Tests.kt", "Spec.kt", "Test.java", "Tests.java", ".test.rb", "_spec.rb", "Test.cs", "Tests.cs"},
 			SkippableForKinds: []FeatureKind{KindBug, KindHotfix, KindTestcase},
 		},
 	},

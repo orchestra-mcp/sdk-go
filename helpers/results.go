@@ -487,6 +487,47 @@ func FormatDiscoveryReviewListMD(reviews []*types.DiscoveryReviewData, header st
 	return b.String()
 }
 
+// FormatDelegationMD formats a single delegation as a Markdown block.
+func FormatDelegationMD(d *types.DelegationData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "### %s\n", d.ID)
+	fmt.Fprintf(&b, "- **Feature:** %s\n", d.FeatureID)
+	fmt.Fprintf(&b, "- **From:** %s\n", d.FromPerson)
+	fmt.Fprintf(&b, "- **To:** %s\n", d.ToPerson)
+	fmt.Fprintf(&b, "- **Status:** %s\n", d.Status)
+	fmt.Fprintf(&b, "- **Question:** %s\n", d.Question)
+	if d.Context != "" {
+		fmt.Fprintf(&b, "- **Context:** %s\n", d.Context)
+	}
+	if d.Response != "" {
+		fmt.Fprintf(&b, "- **Response:** %s\n", d.Response)
+	}
+	if d.RespondedAt != "" {
+		fmt.Fprintf(&b, "- **Responded At:** %s\n", d.RespondedAt)
+	}
+	return b.String()
+}
+
+// FormatDelegationListMD formats a list of delegations as a Markdown table.
+func FormatDelegationListMD(delegations []*types.DelegationData, header string) string {
+	if len(delegations) == 0 {
+		return fmt.Sprintf("## %s\n\nNo delegations found.\n", header)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s (%d)\n\n", header, len(delegations))
+	fmt.Fprintf(&b, "| ID | Feature | From | To | Status | Question |\n")
+	fmt.Fprintf(&b, "|----|---------|------|----|--------|----------|\n")
+	for _, d := range delegations {
+		q := d.Question
+		if len(q) > 60 {
+			q = q[:57] + "..."
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+			d.ID, d.FeatureID, d.FromPerson, d.ToPerson, d.Status, q)
+	}
+	return b.String()
+}
+
 // FormatStatusCountsMD formats status counts as a Markdown table.
 func FormatStatusCountsMD(counts map[string]int, total int) string {
 	var b strings.Builder

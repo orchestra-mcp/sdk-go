@@ -27,16 +27,27 @@ func ValidateLength(s, fieldName string, maxLen int) error {
 	return nil
 }
 
-// ValidateRequired checks that all named fields exist in the Struct and have
-// non-empty string values. Returns an error listing all missing or empty fields.
+// ValidateRequired checks that all named fields exist in the Struct and are
+// non-empty. For string values it checks len > 0; for lists, structs, numbers,
+// and bools it only checks presence (key exists and value is not null).
 func ValidateRequired(args *structpb.Struct, fields ...string) error {
 	if args == nil {
 		return fmt.Errorf("arguments are required: %s", strings.Join(fields, ", "))
 	}
 	var missing []string
 	for _, f := range fields {
-		v := GetString(args, f)
-		if v == "" {
+		v, ok := args.Fields[f]
+		if !ok || v == nil || v.Kind == nil {
+			missing = append(missing, f)
+			continue
+		}
+		// For null values, treat as missing.
+		if _, isNull := v.Kind.(*structpb.Value_NullValue); isNull {
+			missing = append(missing, f)
+			continue
+		}
+		// For strings, also check non-empty.
+		if sv, isStr := v.Kind.(*structpb.Value_StringValue); isStr && sv.StringValue == "" {
 			missing = append(missing, f)
 		}
 	}

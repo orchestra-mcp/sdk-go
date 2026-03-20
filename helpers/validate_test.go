@@ -91,6 +91,71 @@ func TestValidateOneOf_Invalid(t *testing.T) {
 	}
 }
 
+func TestValidateRequired_ListField(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"project_id": "my-project",
+		"plan_id":    "PLAN-001",
+		"features":   []any{map[string]any{"title": "feat1"}},
+	})
+	err := ValidateRequired(s, "project_id", "plan_id", "features")
+	if err != nil {
+		t.Fatalf("expected no error for list field, got: %v", err)
+	}
+}
+
+func TestValidateRequired_EmptyString(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"name": "",
+	})
+	err := ValidateRequired(s, "name")
+	if err == nil {
+		t.Fatal("expected error for empty string field")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("error should mention field name, got: %v", err)
+	}
+}
+
+func TestValidateRequired_NullValue(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"field": nil,
+	})
+	err := ValidateRequired(s, "field")
+	if err == nil {
+		t.Fatal("expected error for null value")
+	}
+}
+
+func TestValidateRequired_NumberField(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"count": 42,
+	})
+	err := ValidateRequired(s, "count")
+	if err != nil {
+		t.Fatalf("expected no error for number field, got: %v", err)
+	}
+}
+
+func TestValidateRequired_BoolField(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"enabled": true,
+	})
+	err := ValidateRequired(s, "enabled")
+	if err != nil {
+		t.Fatalf("expected no error for bool field, got: %v", err)
+	}
+}
+
+func TestValidateRequired_StructField(t *testing.T) {
+	s, _ := structpb.NewStruct(map[string]any{
+		"config": map[string]any{"key": "value"},
+	})
+	err := ValidateRequired(s, "config")
+	if err != nil {
+		t.Fatalf("expected no error for struct field, got: %v", err)
+	}
+}
+
 func TestValidateLengthConstants(t *testing.T) {
 	// Verify constants are set to expected values.
 	if MaxProjectIDLen != 64 {

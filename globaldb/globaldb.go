@@ -66,6 +66,22 @@ CREATE TABLE IF NOT EXISTS session_locks (
 );
 CREATE INDEX IF NOT EXISTS idx_session_locks_session ON session_locks(session_id);
 
+CREATE TABLE IF NOT EXISTS workflows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    initial_state TEXT NOT NULL DEFAULT 'todo',
+    states TEXT NOT NULL DEFAULT '{}',
+    transitions TEXT NOT NULL DEFAULT '[]',
+    gates TEXT NOT NULL DEFAULT '{}',
+    is_default INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workflows_project ON workflows(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_project_name ON workflows(project_id, name);
+
 CREATE TABLE IF NOT EXISTS secrets (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -177,6 +193,27 @@ func SetDefaultProject(slug string) error {
 }
 
 // --- Config helpers ---
+
+// GetConfigPrefix returns all config key-value pairs where the key starts with the given prefix.
+func GetConfigPrefix(prefix string) map[string]string {
+	db, err := DB()
+	if err != nil {
+		return nil
+	}
+	rows, err := db.Query(`SELECT key, value FROM config WHERE key LIKE ?`, prefix+"%")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	result := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if rows.Scan(&k, &v) == nil {
+			result[k] = v
+		}
+	}
+	return result
+}
 
 // GetConfig returns the value for a config key, or empty string.
 func GetConfig(key string) string {
@@ -537,6 +574,219 @@ func MigrateWorkspacesJSON() {
 	if reg.ActiveWorkspaceID != "" {
 		SetActiveWorkspaceID(reg.ActiveWorkspaceID)
 	}
+}
+
+// --- Workflow helpers ---
+
+// WorkflowRecord represents a stored workflow definition.
+type WorkflowRecord struct {
+	ID           string                       `json:"id"`
+	ProjectID    string                       `json:"project_id"`
+	Name         string                       `json:"name"`
+	Description  string                       `json:"description"`
+	InitialState string                       `json:"initial_state"`
+	States       map[string]WorkflowStateRec  `json:"states"`
+	Transitions  []WorkflowTransitionRec      `json:"transitions"`
+	Gates        map[string]WorkflowGateRec   `json:"gates"`
+	IsDefault    bool                         `json:"is_default"`
+	CreatedAt    string                       `json:"created_at"`
+	UpdatedAt    string                       `json:"updated_at"`
+}
+
+// WorkflowStateRec is the stored form of a workflow state.
+type WorkflowStateRec struct {
+	Label      string `json:"label"`
+	Terminal   bool   `json:"terminal,omitempty"`
+	ActiveWork bool   `json:"active_work,omitempty"`
+}
+
+// WorkflowTransitionRec is the stored form of a workflow transition.
+type WorkflowTransitionRec struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Gate string `json:"gate,omitempty"`
+}
+
+// WorkflowGateRec is the stored form of a workflow gate.
+type WorkflowGateRec struct {
+	Label           string   `json:"label"`
+	RequiredSection string   `json:"required_section"`
+	FilePatterns    []string `json:"file_patterns,omitempty"`
+	DocsFolder      string   `json:"docs_folder,omitempty"`
+	SkippableFor    []string `json:"skippable_for,omitempty"`
+}
+
+// CreateWorkflowRecord inserts a new workflow definition.
+func CreateWorkflowRecord(w *WorkflowRecord) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if w.CreatedAt == "" {
+		w.CreatedAt = now
+	}
+	w.UpdatedAt = now
+	if w.States == nil {
+		w.States = make(map[string]WorkflowStateRec)
+	}
+	if w.Transitions == nil {
+		w.Transitions = []WorkflowTransitionRec{}
+	}
+	if w.Gates == nil {
+		w.Gates = make(map[string]WorkflowGateRec)
+	}
+	statesJSON, _ := json.Marshal(w.States)
+	transJSON, _ := json.Marshal(w.Transitions)
+	gatesJSON, _ := json.Marshal(w.Gates)
+	isDefault := 0
+	if w.IsDefault {
+		isDefault = 1
+	}
+	_, err = db.Exec(`INSERT INTO workflows (id, project_id, name, description, initial_state,
+		states, transitions, gates, is_default, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		w.ID, w.ProjectID, w.Name, w.Description, w.InitialState,
+		string(statesJSON), string(transJSON), string(gatesJSON),
+		isDefault, w.CreatedAt, w.UpdatedAt)
+	return err
+}
+
+// GetWorkflowRecord returns a single workflow by ID.
+func GetWorkflowRecord(id string) (*WorkflowRecord, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	return scanWorkflow(db.QueryRow(`SELECT id, project_id, name, description, initial_state,
+		states, transitions, gates, is_default, created_at, updated_at
+		FROM workflows WHERE id = ?`, id))
+}
+
+// GetProjectWorkflow returns the workflow for a project (by project_id).
+// If multiple exist, the default one is preferred.
+func GetProjectWorkflow(projectID string) (*WorkflowRecord, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	return scanWorkflow(db.QueryRow(`SELECT id, project_id, name, description, initial_state,
+		states, transitions, gates, is_default, created_at, updated_at
+		FROM workflows WHERE project_id = ? ORDER BY is_default DESC, created_at ASC LIMIT 1`, projectID))
+}
+
+// ListWorkflowRecords returns all workflows, optionally filtered by project.
+func ListWorkflowRecords(projectID string) ([]*WorkflowRecord, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT id, project_id, name, description, initial_state,
+		states, transitions, gates, is_default, created_at, updated_at FROM workflows`
+	args := []any{}
+	if projectID != "" {
+		query += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	query += ` ORDER BY project_id, is_default DESC, created_at ASC`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*WorkflowRecord
+	for rows.Next() {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
+			continue
+		}
+		result = append(result, w)
+	}
+	return result, nil
+}
+
+// SaveWorkflowRecord updates an existing workflow.
+func SaveWorkflowRecord(w *WorkflowRecord) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	statesJSON, _ := json.Marshal(w.States)
+	transJSON, _ := json.Marshal(w.Transitions)
+	gatesJSON, _ := json.Marshal(w.Gates)
+	isDefault := 0
+	if w.IsDefault {
+		isDefault = 1
+	}
+	_, err = db.Exec(`UPDATE workflows SET name=?, description=?, initial_state=?,
+		states=?, transitions=?, gates=?, is_default=?, updated_at=? WHERE id=?`,
+		w.Name, w.Description, w.InitialState,
+		string(statesJSON), string(transJSON), string(gatesJSON),
+		isDefault, w.UpdatedAt, w.ID)
+	return err
+}
+
+// DeleteWorkflowRecord removes a workflow by ID.
+func DeleteWorkflowRecord(id string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	res, err := db.Exec(`DELETE FROM workflows WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("workflow %q not found", id)
+	}
+	return nil
+}
+
+// scanWorkflow scans a single row into a WorkflowRecord.
+func scanWorkflow(row *sql.Row) (*WorkflowRecord, error) {
+	var w WorkflowRecord
+	var statesJSON, transJSON, gatesJSON string
+	var isDefault int
+	err := row.Scan(&w.ID, &w.ProjectID, &w.Name, &w.Description, &w.InitialState,
+		&statesJSON, &transJSON, &gatesJSON, &isDefault, &w.CreatedAt, &w.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("workflow not found: %w", err)
+	}
+	w.IsDefault = isDefault == 1
+	w.States = make(map[string]WorkflowStateRec)
+	json.Unmarshal([]byte(statesJSON), &w.States)
+	w.Transitions = []WorkflowTransitionRec{}
+	json.Unmarshal([]byte(transJSON), &w.Transitions)
+	w.Gates = make(map[string]WorkflowGateRec)
+	json.Unmarshal([]byte(gatesJSON), &w.Gates)
+	return &w, nil
+}
+
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+// scanWorkflowRow scans from sql.Rows (for list queries).
+func scanWorkflowRow(rows scannable) (*WorkflowRecord, error) {
+	var w WorkflowRecord
+	var statesJSON, transJSON, gatesJSON string
+	var isDefault int
+	err := rows.Scan(&w.ID, &w.ProjectID, &w.Name, &w.Description, &w.InitialState,
+		&statesJSON, &transJSON, &gatesJSON, &isDefault, &w.CreatedAt, &w.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	w.IsDefault = isDefault == 1
+	w.States = make(map[string]WorkflowStateRec)
+	json.Unmarshal([]byte(statesJSON), &w.States)
+	w.Transitions = []WorkflowTransitionRec{}
+	json.Unmarshal([]byte(transJSON), &w.Transitions)
+	w.Gates = make(map[string]WorkflowGateRec)
+	json.Unmarshal([]byte(gatesJSON), &w.Gates)
+	return &w, nil
 }
 
 // --- Secret helpers ---

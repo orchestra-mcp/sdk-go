@@ -271,6 +271,13 @@ func TestCheckFileTypesTestGateMatching(t *testing.T) {
 		"## Results\nRust tests pass: src/parser_test.rs confirmed correct.\n",
 		"## Results\nJS tests pass: src/utils.test.js verified output.\n",
 		"## Results\nPython tests pass: tests/test_auth.test.py verified.\n",
+		"## Results\nDart tests pass: test/auth_test.dart verified.\n",
+		"## Results\nSwift tests pass: Tests/AuthTests.swift verified.\n",
+		"## Results\nSwift tests pass: Tests/AuthTest.swift verified.\n",
+		"## Results\nKotlin tests pass: src/test/AuthTest.kt verified.\n",
+		"## Results\nJava tests pass: src/test/AuthTests.java verified.\n",
+		"## Results\nRuby tests pass: spec/auth_spec.rb verified.\n",
+		"## Results\nC# tests pass: Tests/AuthTests.cs verified.\n",
 	}
 	for _, evidence := range matching {
 		ok, expected := gate.CheckFileTypes(evidence)

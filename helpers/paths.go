@@ -33,6 +33,9 @@ const (
 	// DiscoveryReviewsDir is the subdirectory within a project that holds discovery review files.
 	DiscoveryReviewsDir = "discovery-reviews"
 
+	// DelegationsDir is the subdirectory within a project that holds delegation files.
+	DelegationsDir = "delegations"
+
 	// ConfigFile is the name of the project configuration file.
 	ConfigFile = "project.json"
 )
@@ -98,6 +101,13 @@ func DiscoveryCyclePath(projectSlug, cycleID string) string {
 // .projects/{slug}/discovery-reviews/{id}.md
 func DiscoveryReviewPath(projectSlug, reviewID string) string {
 	return filepath.Join(ProjectsDir, projectSlug, DiscoveryReviewsDir, reviewID+".md")
+}
+
+// DelegationPath returns the file path for a delegation within a project.
+// The result is relative to the workspace root:
+// .projects/{slug}/delegations/{id}.md
+func DelegationPath(projectSlug, delegationID string) string {
+	return filepath.Join(ProjectsDir, projectSlug, DelegationsDir, delegationID+".md")
 }
 
 // ProjectPath returns the directory path for a project.
