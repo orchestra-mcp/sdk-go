@@ -17,6 +17,7 @@ var (
 	globalDB   *sql.DB
 	globalOnce sync.Once
 	globalErr  error
+	globalMu   sync.Mutex
 )
 
 const globalSchema = `
@@ -142,9 +143,12 @@ func DB() (*sql.DB, error) {
 
 // Close closes the global database connection.
 func Close() {
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	if globalDB != nil {
 		globalDB.Close()
 		globalDB = nil
+		globalErr = nil
 		globalOnce = sync.Once{} // Allow re-initialization.
 	}
 }
